@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (EVENT-TRIGGERED SALDO FETCHER)
+-- CDID HUB - BCA COURIER (FULL FINANCIAL ANALYTICS)
 -- ==============================================================================
 local BCA = {}
 
@@ -19,7 +19,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		RestartDelay = 2.0
 	}
 
-	-- STATE & STATS
+	-- STATE & FINANCIAL STATS
 	local State = {
 		Total = 0,
 		Loaded = 0,
@@ -35,7 +35,17 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		DeliveryActive = false,
 
 		TotalTrips = 0,
-		CurrentSaldoText = "Membaca..."
+
+		-- Finansial Saldo BCA Pocket
+		StartSaldo = nil,
+		CurrentSaldo = 0,
+		LastGaji = 0,
+		EarnedSaldo = 0,
+
+		CurrentSaldoText = "Membaca...",
+		StartSaldoText = "Membaca...",
+		LastGajiText = "Rp 0",
+		EarnedText = "+Rp 0"
 	}
 
 	local autoFarmToggle
@@ -50,6 +60,13 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		if type(val) ~= "number" then return tostring(val or "Rp 0") end
 		local r = string.format("%d", math.floor(val)):reverse():gsub("%d%d%d", "%1."):reverse():gsub("^%.", "")
 		return "Rp " .. r
+	end
+
+	local function ParseRupiahToNumber(str)
+		if type(str) == "number" then return str end
+		if type(str) ~= "string" then return 0 end
+		local clean = str:gsub("[^%d]", "")
+		return tonumber(clean) or 0
 	end
 
 	local function GetBcaFolder()
@@ -227,11 +244,11 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	end
 
 	-- ==============================================================================
-	-- POCKET SALDO FETCHER (TRIGGER SAAT AWAL & SELESAI JOB)
+	-- POCKET SALDO FETCHER DENGAN KALKULASI EARNED & GAJI TERAKHIR
 	-- ==============================================================================
 	local function FetchPocketSaldo()
 		task.spawn(function()
-			-- 1. Trigger Pembukaan App MyBCA via Remote
+			-- 1. Trigger Remote Buka App MyBCA
 			local netContainer = ReplicatedStorage:FindFirstChild("NetworkContainer")
 			local remoteEvents = netContainer and netContainer:FindFirstChild("RemoteEvents")
 			local appOpened = remoteEvents and remoteEvents:FindFirstChild("MyBcaAppOpened")
@@ -240,7 +257,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				pcall(function() appOpened:FireServer() end)
 			end
 
-			-- Beri jeda data sync ke GUI
 			task.wait(0.4)
 
 			-- 2. Ambil nilai Saldo Text dari ACTUAL NEW PHONE
@@ -267,7 +283,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				saldoLabel = (btn and btn:FindFirstChild("Saldo")) or (ep and ep:FindFirstChild("Saldo"))
 			end)
 
-			-- Fallback pencarian instan jika nama path memiliki variasi
 			if not saldoLabel then
 				for _, desc in ipairs(phoneGui:GetDescendants()) do
 					if desc:IsA("TextLabel") and desc.Name == "Saldo" and desc.Text:find("Rp") then
@@ -278,9 +293,38 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			end
 
 			if saldoLabel and saldoLabel.Text and saldoLabel.Text ~= "" then
-				State.CurrentSaldoText = saldoLabel.Text
-				if FloatingDash then
-					FloatingDash.UpdateSaldo(State.CurrentSaldoText)
+				local rawText = saldoLabel.Text
+				local parsedNum = ParseRupiahToNumber(rawText)
+
+				if parsedNum > 0 then
+					-- Saldo Awal (Pertama kali membaca)
+					if not State.StartSaldo then
+						State.StartSaldo = parsedNum
+						State.StartSaldoText = FormatRupiah(parsedNum)
+					else
+						-- Hitung gaji yang baru masuk jika saldo bertambah
+						if parsedNum > State.CurrentSaldo and State.CurrentSaldo > 0 then
+							State.LastGaji = parsedNum - State.CurrentSaldo
+							State.LastGajiText = "+" .. FormatRupiah(State.LastGaji)
+						end
+					end
+
+					State.CurrentSaldo = parsedNum
+					State.CurrentSaldoText = FormatRupiah(parsedNum)
+
+					-- Hitung Total Profit / Earned
+					if State.StartSaldo then
+						State.EarnedSaldo = math.max(0, State.CurrentSaldo - State.StartSaldo)
+						State.EarnedText = "+" .. FormatRupiah(State.EarnedSaldo)
+					end
+
+					-- Update ke Floating Dashboard
+					if FloatingDash then
+						FloatingDash.UpdateSaldoAwal(State.StartSaldoText)
+						FloatingDash.UpdateCurrentSaldo(State.CurrentSaldoText)
+						FloatingDash.UpdateEarned(State.EarnedText)
+						FloatingDash.UpdateGajiTerakhir(State.LastGajiText)
+					end
 				end
 			end
 
@@ -300,7 +344,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			if Context.Session ~= _G.MainCoreSession then return end
 		end
 
-		-- PANGGIL 1x DI AWAL LOAD
+		-- Panggil 1x saat pertama kali modul siap
 		FetchPocketSaldo()
 
 		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
@@ -402,7 +446,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				State.TotalTrips = State.TotalTrips + 1
 				if FloatingDash then FloatingDash.UpdateTrips(State.TotalTrips) end
 
-				-- AMBIL SALDO SAAT SELESAI JOB
+				-- Update saldo & hitung gaji
 				FetchPocketSaldo()
 			end
 		end)
@@ -602,11 +646,14 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 	DashboardSection:Button({
 		Title = "Toggle Floating Dashboard (BCA Pocket)",
-		Desc = "Buka/Tutup overlay mini transparan untuk monitor Saldo & Trips secara live.",
+		Desc = "Buka/Tutup overlay monitor Saldo Awal, Current, Earned & Gaji Terakhir.",
 		Callback = function()
 			if not FloatingDash then
 				FloatingDash = UICreate.CreateFloatingDashboard("BCA Courier Live Monitor")
-				FloatingDash.UpdateSaldo(State.CurrentSaldoText)
+				FloatingDash.UpdateSaldoAwal(State.StartSaldoText)
+				FloatingDash.UpdateCurrentSaldo(State.CurrentSaldoText)
+				FloatingDash.UpdateEarned(State.EarnedText)
+				FloatingDash.UpdateGajiTerakhir(State.LastGajiText)
 				FloatingDash.UpdateStatus(string.format("%s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total)))
 				FloatingDash.UpdateTrips(State.TotalTrips)
 				FetchPocketSaldo()
@@ -745,7 +792,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 							task.wait(Config.LoopWait / 2)
 						end
 
-						-- AMBIL SALDO SAAT SELESAI JOB & KLAIM GAJI
+						-- Fetch update saldo & earned setelah klaim gaji
 						FetchPocketSaldo()
 
 						task.wait(Config.RestartDelay)
