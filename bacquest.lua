@@ -138,6 +138,8 @@ local TeleportSection = TeleportTab:Section({
 	Title = "Shortcuts Teleport Karakter"
 })
 
+-- Forward declaration untuk SafeTeleportChar
+local SafeTeleportChar
 
 TeleportSection:Button({
 	Title = "Teleport ke NPC Start (Lobby)",
@@ -168,6 +170,7 @@ TeleportSection:Button({
 		print("📍 Teleportasi ke Rak Koper selesai.")
 	end
 })
+
 local autoFarmToggle
 local statusParagraph
 local saldoParagraph
@@ -194,11 +197,9 @@ local function HumanWalkTo(targetPos, maxWait)
 
 	local dist = (hrp.Position - targetPos).Magnitude
 	if dist > 35 then
-		-- Jika terlalu jauh (misal awal rute), teleport dengan offset wajar
 		hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 1.2, 0))
 		task.wait(Config.ActionDelay)
 	else
-		-- Jika dalam radius dekat, gunakan MoveTo agar animasi kaki berjalan normal
 		hum:MoveTo(targetPos)
 		local startTime = os.clock()
 		while (hrp.Position - targetPos).Magnitude > 3 and (os.clock() - startTime < maxWait) do
@@ -207,7 +208,7 @@ local function HumanWalkTo(targetPos, maxWait)
 	end
 end
 
--- Helper: Teleport Halus Karakter
+-- Helper Fly System
 local FlyConn
 local function UpdateCharacterFly(active)
 	local char = LocalPlayer.Character
@@ -234,11 +235,8 @@ local function UpdateCharacterFly(active)
 		bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
 		bg.CFrame = hrp.CFrame
 		bg.Parent = hrp
-
-		print("✈️ [Fly Mode] Karakter diaktifkan melayang.")
 	else
 		hum.PlatformStand = false
-		print("✈️ [Fly Mode] Karakter diturunkan.")
 	end
 end
 
@@ -274,14 +272,14 @@ local function SetCharacterAnchored(state)
 	end)
 end
 
-local function SafeTeleportChar(targetCFrame)
+SafeTeleportChar = function(targetCFrame)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	if hrp then
-		hrp.Anchored = false -- Unanchor agar posisi baru ter-replikasi ke server
+		hrp.Anchored = false
 		hrp.CFrame = targetCFrame + Vector3.new(0, 1.5, 0)
-		task.wait(0.2) -- Jeda pendek agar server mencatat perpindahan posisi
-		SetCharacterAnchored(true) -- Kunci posisi kembali untuk interaksi
+		task.wait(0.2)
+		SetCharacterAnchored(true)
 		task.wait(Config.ActionDelay)
 	end
 end
@@ -298,10 +296,10 @@ local function TriggerPrompt(prompt, targetPart, isTrunk)
 	if not hrp then return false end
 
 	if targetPart then
-		hrp.Anchored = false -- Unanchor agar perpindahan posisi ter-replikasi
+		hrp.Anchored = false
 		hrp.CFrame = targetPart:GetPivot()
-		task.wait(0.25) -- Jeda kritis agar server menyetujui validasi jarak ProximityPrompt
-		SetCharacterAnchored(true) -- Kunci posisi saat proses menahan tombol
+		task.wait(0.25)
+		SetCharacterAnchored(true)
 	end
 
 	if fireproximityprompt then
@@ -311,7 +309,7 @@ local function TriggerPrompt(prompt, targetPart, isTrunk)
 	prompt:InputHoldBegin()
 	task.wait(prompt.HoldDuration + 0.1)
 	prompt:InputHoldEnd()
-	SetCharacterAnchored(false) -- Bebaskan kembali setelah selesai
+	SetCharacterAnchored(false)
 	return true
 end
 
@@ -347,10 +345,12 @@ local function GetAmbilPrompt(bagasiPoint)
 	return nil
 end
 
--- Helper Naik Driver Seat
+-- Helper Naik Driver Seat (Stabil Tanpa Glitch Ragdoll)
 local function EnterDriverSeat(car)
-	UpdateCharacterFly(false) -- Turun agar bisa masuk kursi kemudi
+	UpdateCharacterFly(false)
 	SetCharacterAnchored(false)
+	task.wait(0.1) -- Jeda fisika agar karakter menapak sempurna
+
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	local hum = char:WaitForChild("Humanoid", 5)
@@ -417,12 +417,12 @@ local function ExitDriverSeat(car)
 	end
 
 	if State.AutoFarmActive then
-		UpdateCharacterFly(true) -- Terbang kembali setelah keluar mobil
+		UpdateCharacterFly(true)
 	end
 end
 
 -- ==============================================================================
--- SIMULASI MENGEMUDI HUMANIZED (ANTI-NERF SALARY)
+-- SIMULASI MENGEMUDI HUMANIZED (ANTI-NERF & ANTI-FLING)
 -- ==============================================================================
 local function DriveCarNaturallyTo(car, targetPos, speed)
 	speed = speed or Config.TweenSpeed
@@ -431,57 +431,77 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 	if not primary then return end
 
 	local startCF = car:GetPivot()
-	-- Offset Y 1.5 stud agar suspensi mobil tetap menyentuh aspal secara natural
-	local targetCF = CFrame.new(targetPos + Vector3.new(0, 4.0, 0), targetPos + Vector3.new(0, 4.0, 10))
+	local targetCF = CFrame.new(targetPos + Vector3.new(0, 2.2, 0), targetPos + Vector3.new(0, 2.2, 10))
 	local dist = (startCF.Position - targetCF.Position).Magnitude
 
-	-- Hitung durasi realistis
 	local calculatedDuration = dist / speed
 	local duration = math.max(Config.MinTravelDuration, calculatedDuration)
 
 	primary.Anchored = false
 
 	local startTime = os.clock()
-	local conn
+	print(string.format("🚗 [Safe Drive] Menyetir (Jarak: %.0f stud | Target Durasi: %.1f dtk | Speed: %.0f studs/s)...", dist, duration, speed))
 
-	print(string.format("🚗 [Humanized Drive] Menyetir ke ATM (Jarak: %.0f stud | Target Durasi: %.1f dtk | Speed: %.0f studs/s)...", dist, duration, speed))
-
-	-- Loop pergerakan fisika aktif (Odometer & Engine Throttle aktif di server)
 	while (os.clock() - startTime) < duration and State.AutoDelivering do
-		local alpha = math.clamp((os.clock() - startTime) / duration, 0, 1)
+		local elapsed = os.clock() - startTime
+		local alpha = math.clamp(elapsed / duration, 0, 1)
 		local currentCF = startCF:Lerp(targetCF, alpha)
 
-		-- Simulasi gas mobil aktif
-		if seat then
-			pcall(function()
-				seat.ThrottleFloat = 1
-				seat.Throttle = 1
-			end)
+		local currentSpeed = speed
+		if alpha > 0.85 then
+			local brakeFactor = (1 - alpha) / 0.15
+			currentSpeed = math.max(10, speed * brakeFactor)
+			if seat then
+				pcall(function()
+					seat.ThrottleFloat = 0
+					seat.Throttle = 0
+				end)
+			end
+		else
+			if seat then
+				pcall(function()
+					seat.ThrottleFloat = 1
+					seat.Throttle = 1
+				end)
+			end
 		end
 
 		car:PivotTo(currentCF)
-
-		-- Memberikan kecepatan linier agar speedometer dan server distance-check terbaca
-		primary.AssemblyLinearVelocity = currentCF.LookVector * speed
+		primary.AssemblyLinearVelocity = currentCF.LookVector * currentSpeed
 		primary.AssemblyAngularVelocity = Vector3.zero
 
 		RunService.Heartbeat:Wait()
 	end
 
-	-- Netralkan kembali saat sampai
 	if seat then
 		pcall(function()
 			seat.ThrottleFloat = 0
 			seat.Throttle = 0
+			seat.SteerFloat = 0
+			seat.Steer = 0
 		end)
 	end
 
+	for _, p in ipairs(car:GetDescendants()) do
+		if p:IsA("BasePart") then
+			p.AssemblyLinearVelocity = Vector3.zero
+			p.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+
+	task.wait(0.15)
 	primary.Anchored = true
-	primary.AssemblyLinearVelocity = Vector3.zero
-	primary.AssemblyAngularVelocity = Vector3.zero
+
+	for _, p in ipairs(car:GetDescendants()) do
+		if p:IsA("BasePart") then
+			p.AssemblyLinearVelocity = Vector3.zero
+			p.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+
 	task.wait(Config.ActionDelay)
 	if State.AutoFarmActive then
-		UpdateCharacterFly(true) -- Terbang kembali setelah keluar mobil
+		UpdateCharacterFly(true)
 	end
 end
 
@@ -528,9 +548,8 @@ _G.MainCoreJobHook = JobRemote.OnClientEvent:Connect(function(action, arg1)
 			print("🛑 [Job State] Kembali ke Unemployee.")
 		end
 	end
-
-	table.insert(_G.BCACourierHooks, _G.MainCoreJobHook)
 end)
+table.insert(_G.BCACourierHooks, _G.MainCoreJobHook)
 
 _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, arg2, arg3, arg4)
 	if action == "Start" then
@@ -554,55 +573,45 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		State.Carrying = (arg4 == true)
 		print(string.format("📦 Status Koper: %s/%s | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
 
-		-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR) ───
+	-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR) ───
 	elseif action == "LoadRound" and typeof(arg1) == "table" then
-		-- Auto-solve Green Bar minigame: presisi penuh, skip 1 period saja (Cara Lama)
-		local greenSize = arg1.greenSize or arg1.greatSize or 0.15
+		local greenSize = arg1.greenSize or arg1.greatSize or 0.18
 		local greenStart = arg1.greenStart or 0.5
 		local period = math.max(arg1.period or 1, 0.1)
 
-		-- Dapatkan ping secara instan tanpa yielding (mencegah frame-rate lag 50ms)
-		local ping = 0
-		pcall(function() ping = LocalPlayer:GetNetworkPing() or 0 end)
-
-		-- Target 40% dalam area hijau (lebih safe dari edge kanan)
-		local centerGreen = greenStart + (greenSize * 0.4)
+		local centerGreen = greenStart + (greenSize / 2)
 		local timeToHit = centerGreen * period
 
-		-- Delay = waktu ke target - ping - 25ms processing lag
-		local delayTime = timeToHit - ping - 0.025
+		local ping = 0
+		pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
 
-		-- Skip 1 period (bukan 2) agar tidak terlalu jauh melewati momen
-		local skipCount = 0
-		while delayTime < 0.02 do
-			delayTime = delayTime + period
-			skipCount += 1
+		local delayTime = timeToHit - ping
+
+		while delayTime < 0.04 do
+			delayTime = delayTime + (2 * period)
 		end
 
-		print(string.format("[LoadRound] start=%.2f size=%.2f period=%.2f target=%.2f ping=%.0fms delay=%.3fs skip=%d",
-			greenStart, greenSize, period, centerGreen, ping*1000, delayTime, skipCount))
+		print(string.format("🎯 [Minigame Koper] Target: %.3f | Ping: %.0fms | Mengirim LoadPress dlm: %.3fs", centerGreen, ping * 2000, delayTime))
 
 		local mySession = session
 		task.delay(delayTime, function()
 			if _G.MainCoreSession ~= mySession then return end
 			Network:FireServer("BankCourier", "LoadPress")
-			print("[LoadRound] LoadPress dikirim!")
+			print("✅ [Minigame Koper] LoadPress PERFECT terkirim!")
 		end)
 
+	-- ─── 2. AUTO PERFECT MINIGAME: SETOR ATM (SKILL CHECK CIRCLE) ───
 	elseif action == "SkillCheck" and typeof(arg1) == "table" then
-		-- Auto-solve ATM circle skillcheck: 100% Always Perfect dengan RTT ping compensation penuh
 		local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
 		local targetAngle = arg1.zoneStart + (zoneWidth / 2)
 		local speed = arg1.speed or 1
 		local warnLead = arg1.warnLead or 0
 
 		local ping = 0
-		pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+		pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
 
 		local timeToHit = warnLead + (targetAngle / speed)
-
-		-- Kompensasi ping RTT penuh + buffer pemrosesan
-		local delayTime = timeToHit - ping - 0.01
+		local delayTime = timeToHit - ping
 
 		local rotations = 0
 		while delayTime < 0.03 do
@@ -612,7 +621,7 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 
 		local angleToSend = targetAngle + (rotations * 360)
 
-		print(string.format("🎯 [Minigame ATM] Great Zone Angle: %.1f | Ping: %.0fms | Mengirim SkillPress dalam: %.3fs", angleToSend, ping * 1000, delayTime))
+		print(string.format("🎯 [Minigame ATM] Great Zone Angle: %.1f | Ping: %.0fms | Mengirim SkillPress dlm: %.3fs", angleToSend, ping * 2000, delayTime))
 
 		local currentSession = session
 		task.delay(delayTime, function()
@@ -620,6 +629,7 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 			Network:FireServer("BankCourier", "SkillPress", angleToSend)
 			print("✅ [Minigame ATM] SkillPress PERFECT terkirim!")
 		end)
+
 	elseif action == "Complete" or action == "Returning" then
 		State.Phase = "Returning"
 		print("🏁 Semua ATM telah berhasil diisi!")
@@ -631,10 +641,9 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		print("🛑 Job Berhenti / Gaji Diterima.")
 	end
 end)
-
--- ==============
 table.insert(_G.BCACourierHooks, _G.MainCoreHook)
--- ================================================================
+
+-- ==============================================================================
 -- 4. AUTOFARM SEQUENCES
 -- ==============================================================================
 local function Action_StartJob()
@@ -757,7 +766,6 @@ local function RunDeliveryLoop()
 				local hrp = char and char:FindFirstChild("HumanoidRootPart")
 				local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
-				-- 1. Naik mobil dan kendarai secara natural (Anti-Nerf)
 				if not State.Carrying and State.TargetPos and distToAtm > 35 then
 					State.IsBusy = true
 					print("[+] Naik ke Driver Seat...")
@@ -766,7 +774,6 @@ local function RunDeliveryLoop()
 
 					if not State.AutoDelivering then State.IsBusy = false break end
 
-					-- Menyetir dengan kalkulasi jarak dan Odometer aktif
 					DriveCarNaturallyTo(car, State.TargetPos + Vector3.new(0, 0, 8), Config.TweenSpeed)
 
 					print("[+] Turun dari Driver Seat...")
@@ -776,7 +783,6 @@ local function RunDeliveryLoop()
 
 				if not State.AutoDelivering then break end
 
-				-- 2. Ambil koper dari bagasi
 				if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 40 then
 					State.IsBusy = true
 					print("[+] Mengambil koper dari bagasi mobil...")
@@ -791,7 +797,6 @@ local function RunDeliveryLoop()
 
 				if not State.AutoDelivering then break end
 
-				-- 3. Berjalan ke ATM dan setor
 				if State.Carrying and State.TargetPos then
 					State.IsBusy = true
 					print("[+] Berjalan menuju mesin ATM...")
@@ -918,21 +923,23 @@ autoFarmToggle = HomeSection:Toggle({
 						continue
 					end
 
-					-- 3. Muat Koper (Auto-Win Minigame)
+					-- 3. Muat Koper (Auto-Win Minigame) dengan Timeout Safety
 					State.AutoLoading = true
 					RunLoadingLoop()
 
-					while State.AutoLoading and State.AutoFarmActive do
+					local loadTimeout = os.clock()
+					while State.AutoLoading and State.AutoFarmActive and (os.clock() - loadTimeout < 60) do
 						if _G.MainCoreSession ~= session then return end
 						task.wait(Config.LoopWait)
 					end
 					if not State.AutoFarmActive or _G.MainCoreSession ~= session then break end
 
-					-- 4. Antar Koper ke ATM (Humanized Driving + Auto-Win Minigame)
+					-- 4. Antar Koper ke ATM (Humanized Driving + Auto-Win Minigame) dengan Timeout Safety
 					State.AutoDelivering = true
 					RunDeliveryLoop()
 
-					while State.AutoDelivering and State.AutoFarmActive do
+					local deliverTimeout = os.clock()
+					while State.AutoDelivering and State.AutoFarmActive and (os.clock() - deliverTimeout < 300) do
 						if _G.MainCoreSession ~= session then return end
 						task.wait(Config.LoopWait)
 					end
@@ -1065,10 +1072,12 @@ SettingsSection:Button({
 		print("⚙️ [Config] Reset manual dipicu dari UI.")
 	end
 })
+
 Window.Frame.Destroying:Connect(function()
 	if _G.MainCoreHook then _G.MainCoreHook:Disconnect() _G.MainCoreHook = nil end
 	if _G.MainCoreDialogHook then _G.MainCoreDialogHook:Disconnect() _G.MainCoreDialogHook = nil end
 	if _G.MainCoreJobHook then _G.MainCoreJobHook:Disconnect() _G.MainCoreJobHook = nil end
+	StopPersistentFly()
 end)
 
 -- Cache TextLabel WindUI
