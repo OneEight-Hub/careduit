@@ -22,7 +22,7 @@ local Context = {
 }
 
 -- Load Utilities
-local Utils = _G.CDID_LoadModule("modules/utils.lua")
+local Utils = _G.CDID_LoadModule("utils.lua")
 Utils.DestroyBuildingInstances()
 Utils.EnablePerformanceMode()
 Utils.SetupAntiAFK()
@@ -112,7 +112,7 @@ end)
 -- LOAD JOB MODULES
 -- ==============================================================================
 -- 1. BCA Courier
-local BCAModule = _G.CDID_LoadModule("modules/bca_courier.lua")
+local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
 BCAModule.Init(Window, Utils, Context)
 
 -- 2. Tambah Job Lain Nanti Cukup Tambahkan Baris Berikut:
