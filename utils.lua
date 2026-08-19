@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - UTILITIES (TOTAL MAP & ROOT INVISIBLE MODE)
+-- CDID HUB - UTILITIES (MAP & MELAWAI DYNAMIC NO-RENDER MODE)
 -- ==============================================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -9,34 +9,41 @@ local VirtualUser = game:GetService("VirtualUser")
 local Utils = {}
 local LocalPlayer = Players.LocalPlayer
 
--- Fungsi untuk membuat seluruh objek BasePart, Decal, Texture, & Mesh transparan total
-local function MakeObjectInvisible(instance)
-	if not instance then return end
-
-	for _, obj in ipairs(instance:GetDescendants()) do
-		if obj:IsA("BasePart") then
-			obj.Transparency = 1
-			obj.CastShadow = false
-			obj.Material = Enum.Material.SmoothPlastic
-		elseif obj:IsA("Decal") or obj:IsA("Texture") then
-			obj.Transparency = 1
-		elseif obj:IsA("SurfaceAppearance") then
-			obj:Destroy()
-		end
+-- Fungsi helper untuk membuat part/tekstur transparan tanpa merusak fisik collision
+local function MakePartInvisible(obj)
+	if obj:IsA("BasePart") then
+		obj.Transparency = 1
+		obj.CastShadow = false
+		obj.Material = Enum.Material.SmoothPlastic
+	elseif obj:IsA("Decal") or obj:IsA("Texture") then
+		obj.Transparency = 1
+	elseif obj:IsA("SurfaceAppearance") then
+		pcall(function() obj:Destroy() end)
 	end
+end
 
-	-- Cek jika root-nya sendiri adalah BasePart
-	if instance:IsA("BasePart") then
-		instance.Transparency = 1
-		instance.CastShadow = false
-		instance.Material = Enum.Material.SmoothPlastic
+-- Fungsi pemindai dan pemasang listener dinamis pada folder target
+local function ApplyNoRenderToFolder(folderInstance, connectionKey)
+	if not folderInstance then return end
+
+	-- 1. Scan semua objek yang sudah ada saat ini
+	for _, obj in ipairs(folderInstance:GetDescendants()) do
+		MakePartInvisible(obj)
+	end
+	MakePartInvisible(folderInstance)
+
+	-- 2. Listener Realtime (Tangkap streaming/asset baru yang baru di-render)
+	if not _G[connectionKey] then
+		_G[connectionKey] = folderInstance.DescendantAdded:Connect(function(newObj)
+			MakePartInvisible(newObj)
+		end)
 	end
 end
 
 function Utils.EnableNoRenderMode()
-	print("⚡ [Performance Mode] Membuat seluruh isi Workspace.Map & akarnya transparan...")
+	print("⚡ [Performance Mode] Mengaktifkan Dynamic No-Render (Map, Melawai & Collab)...")
 
-	-- 1. Matikan Lighting & Efek Render Berat
+	-- 1. Optimasi Lighting Global
 	Lighting.GlobalShadows = false
 	Lighting.FogEnd = 9e9
 	Lighting.Brightness = 1
@@ -47,31 +54,57 @@ function Utils.EnableNoRenderMode()
 		end
 	end
 
-	-- 2. Transparankan SELURUH isi Workspace.Map (Gedung, Jalan, Pohon, Dekorasi, Tanah, dll)
+	-- 2. Transparankan folder Map (Beserta Realtime Stream Listener)
 	local map = Workspace:FindFirstChild("Map")
 	if map then
-		MakeObjectInvisible(map)
+		ApplyNoRenderToFolder(map, "CDID_MapDescendantConn")
 	end
 
-	-- 3. Transparankan part collab BCA (Kecuali NPC, Job, dan ATM)
+	-- 3. Transparankan folder MELAWAI (Beserta Realtime Stream Listener)
+	local melawai = Workspace:FindFirstChild("MELAWAI") or Workspace:FindFirstChild("Melawai")
+	if melawai then
+		ApplyNoRenderToFolder(melawai, "CDID_MelawaiDescendantConn")
+	end
+
+	-- 4. Transparankan part collab BCA (Kecuali NPC, Job, dan ATM)
 	local myBcaCollab = Workspace:FindFirstChild("MY_BCA_COLLAB")
 	if myBcaCollab then
 		for _, item in ipairs(myBcaCollab:GetChildren()) do
 			local name = item.Name:lower()
 			if not name:find("npc") and not name:find("job") and not name:find("atm") then
-				MakeObjectInvisible(item)
+				ApplyNoRenderToFolder(item, "CDID_BcaItemConn_" .. item.Name)
 			end
 		end
 	end
 
-	-- 4. Matikan partikel visual di Workspace
+	-- 5. Tangkap Folder Baru jika MELAWAI / Map baru di-spawn belakangan di Workspace
+	if not _G.CDID_WorkspaceFolderListener then
+		_G.CDID_WorkspaceFolderListener = Workspace.ChildAdded:Connect(function(child)
+			local name = child.Name:upper()
+			if name == "MAP" then
+				ApplyNoRenderToFolder(child, "CDID_MapDescendantConn")
+			elseif name == "MELAWAI" then
+				ApplyNoRenderToFolder(child, "CDID_MelawaiDescendantConn")
+			end
+		end)
+	end
+
+	-- 6. Matikan partikel visual di Workspace
 	for _, obj in ipairs(Workspace:GetDescendants()) do
 		if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
 			obj.Enabled = false
 		end
 	end
 
-	print("✅ [Performance Mode] Seluruh Map & sub-akarnya berhasil dibuat invisible total (Collision tetap aman).")
+	if not _G.CDID_ParticlesListener then
+		_G.CDID_ParticlesListener = Workspace.DescendantAdded:Connect(function(newObj)
+			if newObj:IsA("ParticleEmitter") or newObj:IsA("Trail") or newObj:IsA("Smoke") or newObj:IsA("Fire") or newObj:IsA("Sparkles") then
+				newObj.Enabled = false
+			end
+		end)
+	end
+
+	print("✅ [Performance Mode] Map & Melawai berhasil dibuat invisible dinamis.")
 end
 
 -- Teleport dengan pengamanan anchor
