@@ -73,13 +73,13 @@ local JobRemote = ReplicatedStorage:WaitForChild("NetworkContainer"):WaitForChil
 
 local ExpectedCarName = LocalPlayer.Name .. "sCar"
 
--- CONFIGURABLE VALUES (DIOPTIMASI UNTUK PERJALANAN NATURAL)
+-- CONFIGURABLE VALUES
 local Config = {
-	TweenSpeed = 200,        -- Kecepatan wajar CDID (~60-70 km/jam)
-	MinTravelDuration = 22, -- Batas minimal detik perjalanan agar bonus jarak penuh keluar
-	ActionDelay = 0.2,
-	LoopWait = 0.1,
-	RestartDelay = 1
+	TweenSpeed = 180,        -- Kecepatan wajar agar tidak mental (studs/s)
+	MinTravelDuration = 20, -- Durasi minimal anti-nerf (detik)
+	ActionDelay = 0.3,
+	LoopWait = 0.4,
+	RestartDelay = 2.0
 }
 
 -- State
@@ -102,7 +102,7 @@ local State = {
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
 local Window = WindUI:CreateWindow({
-	Title = "BCA Courier Auto-Farm (Humanized)",
+	Title = "BCA Courier Auto-Farm (Stable)",
 	Author = "by ASRock",
 	Folder = "bca_courier",
 	Icon = "solar:folder-2-bold-duotone",
@@ -129,48 +129,6 @@ local SettingsSection = MainTab:Section({
 	Title = "Konfigurasi Kecepatan & Anti-Nerf"
 })
 
-local TeleportTab = Window:Tab({
-	Title = "Pintasan Teleport",
-	Icon = "solar:map-point-bold-duotone"
-})
-
-local TeleportSection = TeleportTab:Section({
-	Title = "Shortcuts Teleport Karakter"
-})
-
--- Forward declaration untuk SafeTeleportChar
-local SafeTeleportChar
-
-TeleportSection:Button({
-	Title = "Teleport ke NPC Start (Lobby)",
-	Desc = "Teleport instan ke dekat NPC pendaftaran kurir.",
-	Callback = function()
-		local StartNpc = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("NPC_START_JOB")
-		SafeTeleportChar(StartNpc:GetPivot())
-		print("📍 Teleportasi ke NPC Start selesai.")
-	end
-})
-
-TeleportSection:Button({
-	Title = "Teleport ke Spawner Mobil",
-	Desc = "Teleport instan ke petugas parkir kendaraan bank.",
-	Callback = function()
-		local CarSpawner = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("CAR_SPAWNER_NPC")
-		SafeTeleportChar(CarSpawner:GetPivot())
-		print("📍 Teleportasi ke Spawner Mobil selesai.")
-	end
-})
-
-TeleportSection:Button({
-	Title = "Teleport ke Rak Koper",
-	Desc = "Teleport instan ke area tumpukan koper BCA.",
-	Callback = function()
-		local KoperSpawn = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("Job"):WaitForChild("BankCourier"):WaitForChild("KoperSpawn")
-		SafeTeleportChar(KoperSpawn:GetPivot())
-		print("📍 Teleportasi ke Rak Koper selesai.")
-	end
-})
-
 local autoFarmToggle
 local statusParagraph
 local saldoParagraph
@@ -187,29 +145,7 @@ local function ResetPlayerCamera()
 	end
 end
 
--- Helper: Berjalan secara alami ke target
-local function HumanWalkTo(targetPos, maxWait)
-	maxWait = maxWait or 4
-	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-	local hum = char:WaitForChild("Humanoid", 5)
-	local hrp = char:WaitForChild("HumanoidRootPart", 5)
-	if not hum or not hrp then return end
-
-	local dist = (hrp.Position - targetPos).Magnitude
-	if dist > 35 then
-		hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 1.2, 0))
-		task.wait(Config.ActionDelay)
-	else
-		hum:MoveTo(targetPos)
-		local startTime = os.clock()
-		while (hrp.Position - targetPos).Magnitude > 3 and (os.clock() - startTime < maxWait) do
-			task.wait(0.1)
-		end
-	end
-end
-
--- Helper Fly System
-local FlyConn
+-- Helper Fly System (Hanya aktif saat dibutuhkan)
 local function UpdateCharacterFly(active)
 	local char = LocalPlayer.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -221,9 +157,8 @@ local function UpdateCharacterFly(active)
 	if oldBv then oldBv:Destroy() end
 	if oldBg then oldBg:Destroy() end
 
-	if active then
+	if active and not hum.Sit then
 		hum.PlatformStand = true
-
 		local bv = Instance.new("BodyVelocity")
 		bv.Name = "MainCoreFlyVelocity"
 		bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -240,50 +175,20 @@ local function UpdateCharacterFly(active)
 	end
 end
 
-local function StartPersistentFly()
-	if FlyConn then pcall(function() FlyConn:Disconnect() end) end
-	local char = LocalPlayer.Character
-	if char then
-		UpdateCharacterFly(true)
-	end
-	FlyConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
-		task.wait(1.0)
-		if State.AutoFarmActive and not State.IsBusy then
-			local newHum = newChar:WaitForChild("Humanoid", 5)
-			if newHum and not newHum.Sit then
-				UpdateCharacterFly(true)
-			end
-		end
-	end)
-end
-
-local function StopPersistentFly()
-	if FlyConn then pcall(function() FlyConn:Disconnect() end) FlyConn = nil end
+local function SafeTeleportChar(targetCFrame)
 	UpdateCharacterFly(false)
-end
-
-local function SetCharacterAnchored(state)
-	pcall(function()
-		local char = LocalPlayer.Character
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		if hrp then
-			hrp.Anchored = state
-		end
-	end)
-end
-
-SafeTeleportChar = function(targetCFrame)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	if hrp then
 		hrp.Anchored = false
-		hrp.CFrame = targetCFrame + Vector3.new(0, 1.5, 0)
-		task.wait(0.2)
-		SetCharacterAnchored(true)
+		hrp.CFrame = targetCFrame + Vector3.new(0, 1.2, 0)
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
 		task.wait(Config.ActionDelay)
 	end
 end
 
+-- Proximity Prompt Trigger (Tanpa Anchor agar Server Tidak Menolak Interaksi)
 local function TriggerPrompt(prompt, targetPart, isTrunk)
 	if not prompt then return false end
 
@@ -295,11 +200,18 @@ local function TriggerPrompt(prompt, targetPart, isTrunk)
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	if not hrp then return false end
 
+	UpdateCharacterFly(false)
+
 	if targetPart then
 		hrp.Anchored = false
-		hrp.CFrame = targetPart:GetPivot()
-		task.wait(0.25)
-		SetCharacterAnchored(true)
+		if isTrunk then
+			hrp.CFrame = CFrame.new(targetPart.Position + (targetPart.CFrame.LookVector * -1.8), targetPart.Position)
+		else
+			hrp.CFrame = targetPart.CFrame * CFrame.new(0, 0, 1.5)
+		end
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+		task.wait(0.2)
 	end
 
 	if fireproximityprompt then
@@ -309,7 +221,6 @@ local function TriggerPrompt(prompt, targetPart, isTrunk)
 	prompt:InputHoldBegin()
 	task.wait(prompt.HoldDuration + 0.1)
 	prompt:InputHoldEnd()
-	SetCharacterAnchored(false)
 	return true
 end
 
@@ -345,12 +256,9 @@ local function GetAmbilPrompt(bagasiPoint)
 	return nil
 end
 
--- Helper Naik Driver Seat (Stabil Tanpa Glitch Ragdoll)
+-- Helper Naik Driver Seat (Stabil & Mengunci Duduk)
 local function EnterDriverSeat(car)
 	UpdateCharacterFly(false)
-	SetCharacterAnchored(false)
-	task.wait(0.1) -- Jeda fisika agar karakter menapak sempurna
-
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	local hum = char:WaitForChild("Humanoid", 5)
@@ -368,8 +276,7 @@ local function EnterDriverSeat(car)
 
 	if hum.SeatPart == seat or hum.Sit then return true end
 
-	HumanWalkTo(seat.Position + Vector3.new(0, 1.2, 1.5), 2)
-	hrp.CFrame = seat.CFrame * CFrame.new(0, 1.2, 1.5)
+	hrp.CFrame = seat.CFrame * CFrame.new(0, 1.2, 1.2)
 	task.wait(Config.ActionDelay)
 
 	local drivePrompt = seat:FindFirstChild("PromptDriveSeat", true)
@@ -401,7 +308,6 @@ local function EnterDriverSeat(car)
 end
 
 local function ExitDriverSeat(car)
-	SetCharacterAnchored(false)
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChild("Humanoid")
 	if hum and hum.Sit then
@@ -415,14 +321,10 @@ local function ExitDriverSeat(car)
 			primary.Anchored = true
 		end
 	end
-
-	if State.AutoFarmActive then
-		UpdateCharacterFly(true)
-	end
 end
 
 -- ==============================================================================
--- SIMULASI MENGEMUDI HUMANIZED (ANTI-NERF & ANTI-FLING)
+-- SIMULASI MENGEMUDI HUMANIZED (ANTI-FLING & ANTI-FALL)
 -- ==============================================================================
 local function DriveCarNaturallyTo(car, targetPos, speed)
 	speed = speed or Config.TweenSpeed
@@ -430,8 +332,12 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 	local seat = car:FindFirstChildWhichIsA("VehicleSeat", true)
 	if not primary then return end
 
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChild("Humanoid")
+
 	local startCF = car:GetPivot()
-	local targetCF = CFrame.new(targetPos + Vector3.new(0, 2.2, 0), targetPos + Vector3.new(0, 2.2, 10))
+	-- Offset Y 1.8 stud agar ban tepat di aspal tanpa tembus
+	local targetCF = CFrame.new(targetPos + Vector3.new(0, 1.8, 0), targetPos + Vector3.new(0, 1.8, 10))
 	local dist = (startCF.Position - targetCF.Position).Magnitude
 
 	local calculatedDuration = dist / speed
@@ -440,9 +346,14 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 	primary.Anchored = false
 
 	local startTime = os.clock()
-	print(string.format("🚗 [Safe Drive] Menyetir (Jarak: %.0f stud | Target Durasi: %.1f dtk | Speed: %.0f studs/s)...", dist, duration, speed))
+	print(string.format("🚗 [Drive Safe] Melaju ke ATM (Jarak: %.0f stud | Durasi: %.1f dtk)...", dist, duration))
 
 	while (os.clock() - startTime) < duration and State.AutoDelivering do
+		-- FAIL-SAFE: Jika karakter terlempar dari kursi di tengah jalan, dudukkan kembali
+		if hum and not hum.Sit and seat then
+			pcall(function() seat:Sit(hum) end)
+		end
+
 		local elapsed = os.clock() - startTime
 		local alpha = math.clamp(elapsed / duration, 0, 1)
 		local currentCF = startCF:Lerp(targetCF, alpha)
@@ -452,17 +363,11 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 			local brakeFactor = (1 - alpha) / 0.15
 			currentSpeed = math.max(10, speed * brakeFactor)
 			if seat then
-				pcall(function()
-					seat.ThrottleFloat = 0
-					seat.Throttle = 0
-				end)
+				pcall(function() seat.ThrottleFloat = 0; seat.Throttle = 0 end)
 			end
 		else
 			if seat then
-				pcall(function()
-					seat.ThrottleFloat = 1
-					seat.Throttle = 1
-				end)
+				pcall(function() seat.ThrottleFloat = 1; seat.Throttle = 1 end)
 			end
 		end
 
@@ -482,6 +387,7 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 		end)
 	end
 
+	-- Netralkan sisa energi kinetik sebelum di-anchor
 	for _, p in ipairs(car:GetDescendants()) do
 		if p:IsA("BasePart") then
 			p.AssemblyLinearVelocity = Vector3.zero
@@ -500,20 +406,16 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 	end
 
 	task.wait(Config.ActionDelay)
-	if State.AutoFarmActive then
-		UpdateCharacterFly(true)
-	end
 end
 
 -- ==============================================================================
--- 3. HOOKS EVENT NETWORK & PERFECT AUTO-WIN MINIGAMES
+-- 3. HOOKS EVENT NETWORK & AUTO-WIN MINIGAMES
 -- ==============================================================================
 _G.MainCoreDialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, data)
 	if action == "Start" then
-		print("💬 [Dialog] Event dialog diterima -> Menyelesaikan ke server & client...")
+		print("💬 [Dialog] Event dialog diterima -> Menyelesaikan...")
 		task.spawn(function()
 			task.wait(0.5)
-
 			NpcDialogEvent:FireServer("Finish", nil)
 
 			if firesignal then
@@ -530,7 +432,6 @@ _G.MainCoreDialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, da
 					end
 				end
 			end
-			print("✅ [Dialog] Dialog selesai & Kamera kembali normal.")
 		end)
 	end
 end)
@@ -573,7 +474,7 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		State.Carrying = (arg4 == true)
 		print(string.format("📦 Status Koper: %s/%s | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
 
-		-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR) ───
+	-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR) ───
 	elseif action == "LoadRound" and typeof(arg1) == "table" then
 		local greenSize = arg1.greenSize or arg1.greatSize or 0.18
 		local greenStart = arg1.greenStart or 0.5
@@ -591,8 +492,6 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 			delayTime = delayTime + (2 * period)
 		end
 
-		print(string.format("🎯 [Minigame Koper] Target: %.3f | Ping: %.0fms | Mengirim LoadPress dlm: %.3fs", centerGreen, ping * 2000, delayTime))
-
 		local mySession = session
 		task.delay(delayTime, function()
 			if _G.MainCoreSession ~= mySession then return end
@@ -600,7 +499,7 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 			print("✅ [Minigame Koper] LoadPress PERFECT terkirim!")
 		end)
 
-		-- ─── 2. AUTO PERFECT MINIGAME: SETOR ATM (SKILL CHECK CIRCLE) ───
+	-- ─── 2. AUTO PERFECT MINIGAME: SETOR ATM (SKILL CHECK CIRCLE) ───
 	elseif action == "SkillCheck" and typeof(arg1) == "table" then
 		local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
 		local targetAngle = arg1.zoneStart + (zoneWidth / 2)
@@ -620,8 +519,6 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		end
 
 		local angleToSend = targetAngle + (rotations * 360)
-
-		print(string.format("🎯 [Minigame ATM] Great Zone Angle: %.1f | Ping: %.0fms | Mengirim SkillPress dlm: %.3fs", angleToSend, ping * 2000, delayTime))
 
 		local currentSession = session
 		task.delay(delayTime, function()
@@ -654,9 +551,9 @@ local function Action_StartJob()
 		return
 	end
 
-	print("[UI] Berjalan ke NPC Start...")
+	print("[UI] Teleport ke NPC Start...")
 	SafeTeleportChar(StartNpc:GetPivot())
-	task.wait(1)
+	task.wait(0.5)
 
 	local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
 	if prompt then prompt.Enabled = true end
@@ -674,9 +571,9 @@ end
 local function Action_SpawnVehicle()
 	local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
 	local CarSpawner = Mf:WaitForChild("CAR_SPAWNER_NPC")
-	print("[UI] Berjalan ke Spawner Mobil...")
+	print("[UI] Teleport ke Spawner Mobil...")
 	SafeTeleportChar(CarSpawner:GetPivot())
-	task.wait(1)
+	task.wait(0.5)
 
 	local spawnPrompt = CarSpawner:FindFirstChildWhichIsA("ProximityPrompt", true)
 	if spawnPrompt then spawnPrompt.Enabled = true end
@@ -684,7 +581,7 @@ local function Action_SpawnVehicle()
 	print("[UI] Mengeluarkan Kendaraan...")
 	TriggerPrompt(spawnPrompt, CarSpawner.PrimaryPart or CarSpawner:FindFirstChildWhichIsA("BasePart"))
 
-	task.wait(1.5)
+	task.wait(1.2)
 end
 
 local function RunLoadingLoop()
@@ -711,7 +608,7 @@ local function RunLoadingLoop()
 
 			if not State.Carrying and not State.IsBusy then
 				State.IsBusy = true
-				print("[+] Berjalan mengambil koper...")
+				print("[+] Mengambil koper dari rak...")
 				SafeTeleportChar(KoperSpawn:GetPivot())
 				TriggerPrompt(koperPrompt, KoperSpawn.PrimaryPart or KoperSpawn:FindFirstChildWhichIsA("BasePart"))
 
@@ -723,7 +620,7 @@ local function RunLoadingLoop()
 			elseif State.Carrying and not State.IsBusy then
 				if bagasiPoint and muatPrompt then
 					State.IsBusy = true
-					print("[+] Berjalan memuat koper ke bagasi...")
+					print("[+] Memuat koper ke bagasi...")
 					SafeTeleportChar(bagasiPoint.CFrame)
 					TriggerPrompt(muatPrompt, bagasiPoint, true)
 
@@ -766,15 +663,16 @@ local function RunDeliveryLoop()
 				local hrp = char and char:FindFirstChild("HumanoidRootPart")
 				local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
+				-- 1. Naik mobil dan kendarai secara natural
 				if not State.Carrying and State.TargetPos and distToAtm > 35 then
 					State.IsBusy = true
-					print("[+] Naik ke Driver Seat...")
+					print("[+] Masuk ke Driver Seat...")
 					EnterDriverSeat(car)
 					task.wait(Config.ActionDelay)
 
 					if not State.AutoDelivering then State.IsBusy = false break end
 
-					DriveCarNaturallyTo(car, State.TargetPos + Vector3.new(0, 0, 8), Config.TweenSpeed)
+					DriveCarNaturallyTo(car, State.TargetPos + Vector3.new(0, 0, 10), Config.TweenSpeed)
 
 					print("[+] Turun dari Driver Seat...")
 					ExitDriverSeat(car)
@@ -783,9 +681,11 @@ local function RunDeliveryLoop()
 
 				if not State.AutoDelivering then break end
 
+				-- 2. Ambil koper dari bagasi
 				if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 40 then
 					State.IsBusy = true
-					print("[+] Mengambil koper dari bagasi mobil...")
+					print("[+] Mengambil koper dari bagasi...")
+					SafeTeleportChar(bagasiPoint.CFrame)
 					TriggerPrompt(ambilPrompt, bagasiPoint, true)
 
 					local waitCarry = os.clock()
@@ -797,14 +697,10 @@ local function RunDeliveryLoop()
 
 				if not State.AutoDelivering then break end
 
-				-- 3. Berjalan/Teleport Tepat ke Depan ATM dan Setor
+				-- 3. Berpindah tepat ke depan ATM dan setor
 				if State.Carrying and State.TargetPos then
 					State.IsBusy = true
 					print("[+] Berpindah tepat ke depan mesin ATM...")
-
-					-- Pastikan karakter menapak tanah tepat di depan mesin ATM
-					UpdateCharacterFly(false)
-					SetCharacterAnchored(false)
 					SafeTeleportChar(CFrame.new(State.TargetPos + Vector3.new(0, 0, 1.5)))
 					task.wait(Config.ActionDelay)
 
@@ -826,7 +722,7 @@ local function RunDeliveryLoop()
 end
 
 local function Action_ResetAll()
-	StopPersistentFly()
+	UpdateCharacterFly(false)
 	if not State.AutoFarmActive and _G.MainCoreSession == session then
 		return
 	end
@@ -887,7 +783,6 @@ autoFarmToggle = HomeSection:Toggle({
 
 		State.AutoFarmActive = active
 		if active then
-			StartPersistentFly()
 			task.spawn(function()
 				print("[AutoFarm] Memulai Siklus Pengantaran...")
 				while State.AutoFarmActive do
@@ -928,7 +823,7 @@ autoFarmToggle = HomeSection:Toggle({
 						continue
 					end
 
-					-- 3. Muat Koper (Auto-Win Minigame) dengan Timeout Safety
+					-- 3. Muat Koper dengan Timeout Safety
 					State.AutoLoading = true
 					RunLoadingLoop()
 
@@ -939,7 +834,7 @@ autoFarmToggle = HomeSection:Toggle({
 					end
 					if not State.AutoFarmActive or _G.MainCoreSession ~= session then break end
 
-					-- 4. Antar Koper ke ATM (Humanized Driving + Auto-Win Minigame) dengan Timeout Safety
+					-- 4. Antar Koper ke ATM dengan Timeout Safety
 					State.AutoDelivering = true
 					RunDeliveryLoop()
 
@@ -970,7 +865,7 @@ autoFarmToggle = HomeSection:Toggle({
 					local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
 					local StartNpc = Mf:WaitForChild("NPC_START_JOB")
 					SafeTeleportChar(StartNpc:GetPivot())
-					task.wait(1)
+					task.wait(0.5)
 
 					local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
 					if prompt then prompt.Enabled = true end
@@ -1010,16 +905,14 @@ saldoParagraph = HomeSection:Paragraph({
 
 SettingsSection:Input({
 	Title = "Kecepatan Mengemudi (Speed)",
-	Desc = "Masukkan kecepatan wajar CDID (studs/detik).",
+	Desc = "Kecepatan wajar CDID (studs/detik).",
 	Value = tostring(Config.TweenSpeed),
-	Placeholder = "Contoh: 65",
+	Placeholder = "Contoh: 70",
 	Callback = function(val)
 		local num = tonumber(val)
 		if num then
 			Config.TweenSpeed = num
 			print("⚙️ [Config] Kecepatan diubah:", num, "studs/detik")
-		else
-			warn("⚠️ Input kecepatan harus berupa angka!")
 		end
 	end
 })
@@ -1027,7 +920,7 @@ SettingsSection:Input({
 SettingsSection:Slider({
 	Title = "Durasi Minimum Perjalanan",
 	Desc = "Batas minimal detik perjalanan per rute (Anti-Nerf).",
-	Value = { Min = 10, Max = 45, Default = 22 },
+	Value = { Min = 10, Max = 45, Default = 20 },
 	Callback = function(val)
 		Config.MinTravelDuration = val
 		print("⚙️ [Config] Min Travel Time:", val, "detik")
@@ -1037,7 +930,7 @@ SettingsSection:Slider({
 SettingsSection:Slider({
 	Title = "Jeda Aksi (Action Delay)",
 	Desc = "Jeda waktu interaksi tombol (detik).",
-	Value = { Min = 2, Max = 20, Default = 5 },
+	Value = { Min = 2, Max = 20, Default = 3 },
 	Callback = function(val)
 		Config.ActionDelay = val / 10
 	end
@@ -1047,25 +940,13 @@ SettingsSection:Input({
 	Title = "Jeda Mengulang (Restart Delay)",
 	Desc = "Jeda waktu tunggu sebelum mencoba kembali setelah gagal (detik).",
 	Value = tostring(Config.RestartDelay),
-	Placeholder = "Contoh: 3.0",
+	Placeholder = "Contoh: 2.0",
 	Callback = function(val)
 		local num = tonumber(val)
 		if num then
 			Config.RestartDelay = num
 			print("⚙️ [Config] Jeda mengulang diubah:", num, "detik")
-		else
-			warn("⚠️ Input jeda mengulang harus berupa angka!")
 		end
-	end
-})
-
-SettingsSection:Slider({
-	Title = "Jeda Siklus (Cycle Delay)",
-	Desc = "Jeda waktu pemeriksaan loop utama (detik).",
-	Value = { Min = 2, Max = 20, Default = 6 },
-	Callback = function(val)
-		Config.LoopWait = val / 10
-		print("⚙️ [Config] Jeda siklus diubah:", Config.LoopWait, "detik")
 	end
 })
 
@@ -1082,7 +963,7 @@ Window.Frame.Destroying:Connect(function()
 	if _G.MainCoreHook then _G.MainCoreHook:Disconnect() _G.MainCoreHook = nil end
 	if _G.MainCoreDialogHook then _G.MainCoreDialogHook:Disconnect() _G.MainCoreDialogHook = nil end
 	if _G.MainCoreJobHook then _G.MainCoreJobHook:Disconnect() _G.MainCoreJobHook = nil end
-	StopPersistentFly()
+	UpdateCharacterFly(false)
 end)
 
 -- Cache TextLabel WindUI
@@ -1185,4 +1066,4 @@ task.spawn(function()
 	end
 end)
 
-print("🎉 MainCore Humanized Auto-Farm Berhasil Diinisialisasi!")
+print("🎉 MainCore Stable Auto-Farm Berhasil Diinisialisasi!")
