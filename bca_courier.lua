@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (SYNCED WITH SMART PLATFORM & DESTROY MAP)
+-- CDID HUB - BCA COURIER (ACCURATE PHONE GUI SALDO FETCHER)
 -- ==============================================================================
 local BCA = {}
 
@@ -227,7 +227,72 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	end
 
 	-- ==============================================================================
-	-- LAZY INITIALIZER & HYBRID SALDO TRACKER
+	-- POCKET SALDO FETCHER (FIRE REMOTE -> BACA PHONE GUI -> DISABLE PHONE GUI)
+	-- ==============================================================================
+	local function FetchPocketSaldo()
+		task.spawn(function()
+			-- 1. Trigger Pembukaan App MyBCA via Remote
+			local netContainer = ReplicatedStorage:FindFirstChild("NetworkContainer")
+			local remoteEvents = netContainer and netContainer:FindFirstChild("RemoteEvents")
+			local appOpened = remoteEvents and remoteEvents:FindFirstChild("MyBcaAppOpened")
+
+			if appOpened then
+				pcall(function() appOpened:FireServer() end)
+			end
+
+			-- Beri jeda data sync ke GUI
+			task.wait(0.35)
+
+			-- 2. Ambil nilai Saldo Text
+			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+			if not pGui then return end
+
+			local phoneGui = pGui:FindFirstChild("ACTUAL NEW PHONE")
+			if not phoneGui then return end
+
+			local saldoLabel = nil
+			pcall(function()
+				local container = phoneGui:FindFirstChild("Container")
+				local holder = container and container:FindFirstChild("Holder")
+				local appCont = holder and (holder:FindFirstChild("AppContainer") or holder:FindFirstChild("AppCountainer"))
+				local myBca = appCont and appCont:FindFirstChild("MyBca")
+				local home = myBca and myBca:FindFirstChild("Home")
+				local main = home and home:FindFirstChild("Main")
+				local frame = main and main:FindFirstChild("Frame")
+				local pocket = frame and (frame:FindFirstChild("3b_POCKETRUPPIAH") or frame:FindFirstChild("3b_POCKETRUPIAH"))
+				local balFr = pocket and pocket:FindFirstChild("BalanceFrame")
+				local scroll = balFr and (balFr:FindFirstChild("ScrollingFrame") or balFr:FindFirstChild("ScrolingFrame"))
+				local ep = scroll and scroll:FindFirstChild("EventPocket")
+				local btn = ep and ep:FindFirstChild("Button")
+				saldoLabel = (btn and btn:FindFirstChild("Saldo")) or (ep and ep:FindFirstChild("Saldo"))
+			end)
+
+			-- Fallback pencarian instan jika nama path ada variasi
+			if not saldoLabel then
+				for _, desc in ipairs(phoneGui:GetDescendants()) do
+					if desc:IsA("TextLabel") and desc.Name == "Saldo" and desc.Text:find("Rp") then
+						saldoLabel = desc
+						break
+					end
+				end
+			end
+
+			if saldoLabel and saldoLabel.Text and saldoLabel.Text ~= "" then
+				State.CurrentSaldoText = saldoLabel.Text
+				if FloatingDash then
+					FloatingDash.UpdateSaldo(State.CurrentSaldoText)
+				end
+			end
+
+			-- 3. Sembunyikan GUI HP agar tidak memenuhi layar
+			pcall(function()
+				phoneGui.Enabled = false
+			end)
+		end)
+	end
+
+	-- ==============================================================================
+	-- LAZY INITIALIZER & NETWORK HOOKS
 	-- ==============================================================================
 	task.spawn(function()
 		while not GetBcaFolder() do
@@ -235,81 +300,11 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			if Context.Session ~= _G.MainCoreSession then return end
 		end
 
-		local function GetSaldoFromGui()
-			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
-			local container = pGui and pGui:FindFirstChild("Container")
-			local holder = container and container:FindFirstChild("Holder")
-			local appCont = holder and holder:FindFirstChild("AppCountainer")
-			local myBca = appCont and appCont:FindFirstChild("MyBca")
-			local home = myBca and myBca:FindFirstChild("Home")
-			local main = home and home:FindFirstChild("Main")
-			local frame = main and main:FindFirstChild("Frame")
-			local pocket = frame and frame:FindFirstChild("3b_POCKETRUPIAH")
-			local balFr = pocket and pocket:FindFirstChild("BalanceFrame")
-			local scroll = balFr and balFr:FindFirstChild("ScrolingFrame")
-			local ep = scroll and scroll:FindFirstChild("EventPocket")
-			local saldo = ep and ep:FindFirstChild("Saldo")
-			return saldo and saldo.Text or nil
-		end
-
-		local function SetupReplicaSaldo()
-			local clientCont = ReplicatedStorage:FindFirstChild("ClientContainer")
-			local controller = clientCont and clientCont:FindFirstChild("Controller")
-			local replicaMod = controller and controller:FindFirstChild("ReplicaController")
-			if not replicaMod then return false end
-
-			local ok, RC = pcall(require, replicaMod)
-			if not ok or not RC then return false end
-
-			local function ApplySaldo(val)
-				if val then
-					State.CurrentSaldoText = FormatRupiah(val)
-					if FloatingDash then FloatingDash.UpdateSaldo(State.CurrentSaldoText) end
-				end
-			end
-
-			local className = "Player_" .. LocalPlayer.UserId
-			if RC.Replicas then
-				for _, rep in pairs(RC.Replicas) do
-					if rep.Class == className or rep.ClassName == className then
-						local c = rep.Data and rep.Data.Collab
-						local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
-						ApplySaldo(p)
-						rep:ListenToChange({"Collab"}, function(newCollab)
-							local np = newCollab and newCollab.MyBca2026 and newCollab.MyBca2026.PocketRupiah
-							ApplySaldo(np)
-						end)
-						break
-					end
-				end
-			end
-
-			RC.ReplicaOfClassCreated(className, function(replica)
-				local c = replica.Data and replica.Data.Collab
-				local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
-				ApplySaldo(p)
-
-				replica:ListenToChange({"Collab"}, function(newCollab)
-					local np = newCollab and newCollab.MyBca2026 and newCollab.MyBca2026.PocketRupiah
-					ApplySaldo(np)
-				end)
-			end)
-
-			return true
-		end
-
-		SetupReplicaSaldo()
-
+		-- Loop Background Pengambilan Saldo Setiap 4 Detik
 		task.spawn(function()
-			while task.wait(1) do
+			while task.wait(4) do
 				if Context.Session ~= _G.MainCoreSession then break end
-				local guiText = GetSaldoFromGui()
-				if guiText and guiText ~= "" then
-					State.CurrentSaldoText = guiText
-					if FloatingDash then
-						FloatingDash.UpdateSaldo(State.CurrentSaldoText)
-					end
-				end
+				FetchPocketSaldo()
 			end
 		end)
 
@@ -344,6 +339,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 					State.Phase = "Unemployee"
 					State.Loaded = 0
 					State.Total = 0
+					FetchPocketSaldo()
 				end
 			end
 		end)
@@ -353,6 +349,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			if action == "Start" then
 				State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
 				State.Phase = "Loading"
+				FetchPocketSaldo()
 
 			elseif action == "Phase" then
 				State.Phase = arg1
@@ -404,6 +401,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 			elseif action == "Complete" or action == "Returning" then
 				State.Phase = "Returning"
+				FetchPocketSaldo()
 
 			elseif action == "Stop" then
 				State.Phase = "Unemployee"
@@ -411,13 +409,14 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				State.Total = 0
 				State.TotalTrips = State.TotalTrips + 1
 				if FloatingDash then FloatingDash.UpdateTrips(State.TotalTrips) end
+				FetchPocketSaldo()
 			end
 		end)
 		table.insert(Context.Hooks, bankHook)
 	end)
 
 	-- ==============================================================================
-	-- AUTOFARM SEQUENCES (DENGAN ANCHOR FREEZING SAAT INTERAKSI)
+	-- AUTOFARM SEQUENCES
 	-- ==============================================================================
 	local function Action_StartJob()
 		local Mf = GetBcaFolder()
@@ -616,6 +615,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				FloatingDash.UpdateSaldo(State.CurrentSaldoText)
 				FloatingDash.UpdateStatus(string.format("%s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total)))
 				FloatingDash.UpdateTrips(State.TotalTrips)
+				FetchPocketSaldo()
 			else
 				FloatingDash.Destroy()
 				FloatingDash = nil
