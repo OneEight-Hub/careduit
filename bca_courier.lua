@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (FULL STABLE, NO-RENDER & ANCHOR FREEZING)
+-- CDID HUB - BCA COURIER (SYNCED WITH SMART PLATFORM & DESTROY MAP)
 -- ==============================================================================
 local BCA = {}
 
@@ -43,10 +43,19 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	local Network = nil
 	local FloatingDash = nil
 
+	-- ==============================================================================
+	-- HELPER FUNCTIONS
+	-- ==============================================================================
 	local function FormatRupiah(val)
 		if type(val) ~= "number" then return tostring(val or "Rp 0") end
 		local r = string.format("%d", math.floor(val)):reverse():gsub("%d%d%d", "%1."):reverse():gsub("^%.", "")
 		return "Rp " .. r
+	end
+
+	local function GetBcaFolder()
+		return Workspace:FindFirstChild("MY_BCA_COLLAB") 
+			or Workspace:FindFirstChild("MyBcaCollab") 
+			or Workspace:FindFirstChild("my_bca_collab")
 	end
 
 	local function GetValidHumanoid()
@@ -221,7 +230,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	-- LAZY INITIALIZER & HYBRID SALDO TRACKER
 	-- ==============================================================================
 	task.spawn(function()
-		while not Workspace:FindFirstChild("MY_BCA_COLLAB") do
+		while not GetBcaFolder() do
 			task.wait(1.5)
 			if Context.Session ~= _G.MainCoreSession then return end
 		end
@@ -411,10 +420,12 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	-- AUTOFARM SEQUENCES (DENGAN ANCHOR FREEZING SAAT INTERAKSI)
 	-- ==============================================================================
 	local function Action_StartJob()
-		local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
-		local StartNpc = Mf:WaitForChild("NPC_START_JOB")
-		if State.Phase == "Loading" or State.Phase == "Delivering" then return end
+		local Mf = GetBcaFolder()
+		if not Mf then return end
+		local StartNpc = Mf:FindFirstChild("NPC_START_JOB")
+		if not StartNpc or State.Phase == "Loading" or State.Phase == "Delivering" then return end
 
+		print("📍 [Step 1] Teleport ke NPC Start Job...")
 		Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
 		task.wait(0.5)
 		local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -427,8 +438,12 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	end
 
 	local function Action_SpawnVehicle()
-		local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
-		local CarSpawner = Mf:WaitForChild("CAR_SPAWNER_NPC")
+		local Mf = GetBcaFolder()
+		if not Mf then return end
+		local CarSpawner = Mf:FindFirstChild("CAR_SPAWNER_NPC")
+		if not CarSpawner then return end
+
+		print("🚗 [Step 2] Teleport ke Spawner Mobil...")
 		Utils.SafeTeleportChar(CarSpawner:GetPivot(), Config.ActionDelay)
 		task.wait(0.5)
 		local spawnPrompt = CarSpawner:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -440,10 +455,15 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	local function RunLoadingLoop()
 		if State.LoadingActive then return end
 		State.LoadingActive = true
-		local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
-		local KoperSpawn = Mf:WaitForChild("Job"):WaitForChild("BankCourier"):WaitForChild("KoperSpawn")
+		local Mf = GetBcaFolder()
+		if not Mf then return end
+		local jobFolder = Mf:FindFirstChild("Job")
+		local bankCourierFolder = jobFolder and jobFolder:FindFirstChild("BankCourier")
+		local KoperSpawn = bankCourierFolder and bankCourierFolder:FindFirstChild("KoperSpawn")
+		if not KoperSpawn then return end
 
 		task.spawn(function()
+			print("📦 [Step 3] Memuat koper ke bagasi...")
 			while State.AutoLoading do
 				if _G.MainCoreSession ~= Context.Session then break end
 				if State.Phase == "Delivering" or (State.Total > 0 and State.Loaded >= State.Total) then
@@ -487,6 +507,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		State.DeliveryActive = true
 
 		task.spawn(function()
+			print("🏧 [Step 4] Memulai pengantaran ATM...")
 			while State.AutoDelivering do
 				if _G.MainCoreSession ~= Context.Session then break end
 				if (State.Loaded <= 0 and not State.Carrying) or (State.Phase == "Returning" and State.Loaded <= 0) then
@@ -526,7 +547,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 					if not State.AutoDelivering then break end
 
-					-- Solusi 2: Freezing Anchor Tepat di Depan ATM Saat Minigame Berlangsung
 					if State.Carrying and State.TargetPos then
 						State.IsBusy = true
 						Utils.SafeTeleportChar(CFrame.new(State.TargetPos + Vector3.new(0, 0, 1.5)), Config.ActionDelay)
@@ -551,7 +571,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	end
 
 	local function Action_ResetAll()
-		if not State.AutoFarmActive and _G.MainCoreSession == Context.Session then return end
 		State.AutoFarmActive = false
 		State.AutoLoading = false
 		State.AutoDelivering = false
@@ -607,24 +626,29 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	ShortcutsSection:Button({
 		Title = "Teleport ke NPC Start (Lobby)",
 		Callback = function()
-			local StartNpc = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("NPC_START_JOB")
-			Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
+			local Mf = GetBcaFolder()
+			local StartNpc = Mf and Mf:FindFirstChild("NPC_START_JOB")
+			if StartNpc then Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay) end
 		end
 	})
 
 	ShortcutsSection:Button({
 		Title = "Teleport ke Spawner Mobil",
 		Callback = function()
-			local CarSpawner = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("CAR_SPAWNER_NPC")
-			Utils.SafeTeleportChar(CarSpawner:GetPivot(), Config.ActionDelay)
+			local Mf = GetBcaFolder()
+			local CarSpawner = Mf and Mf:FindFirstChild("CAR_SPAWNER_NPC")
+			if CarSpawner then Utils.SafeTeleportChar(CarSpawner:GetPivot(), Config.ActionDelay) end
 		end
 	})
 
 	ShortcutsSection:Button({
 		Title = "Teleport ke Rak Koper",
 		Callback = function()
-			local KoperSpawn = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("Job"):WaitForChild("BankCourier"):WaitForChild("KoperSpawn")
-			Utils.SafeTeleportChar(KoperSpawn:GetPivot(), Config.ActionDelay)
+			local Mf = GetBcaFolder()
+			local jobFolder = Mf and Mf:FindFirstChild("Job")
+			local bankCourier = jobFolder and jobFolder:FindFirstChild("BankCourier")
+			local KoperSpawn = bankCourier and bankCourier:FindFirstChild("KoperSpawn")
+			if KoperSpawn then Utils.SafeTeleportChar(KoperSpawn:GetPivot(), Config.ActionDelay) end
 		end
 	})
 
@@ -635,8 +659,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		Callback = function(active)
 			if State.AutoFarmActive == active then return end
 
-			if active and not Workspace:FindFirstChild("MY_BCA_COLLAB") then
-				warn("⚠️ [BCA Courier] Kamu belum berada di map gameplay! Silakan pilih server/map terlebih dahulu.")
+			local bcaFolder = GetBcaFolder()
+			if active and not bcaFolder then
+				warn("⚠️ [BCA Courier] Kamu belum berada di area BCA / Map Gameplay!")
 				task.spawn(function()
 					task.wait(0.1)
 					if autoFarmToggle then pcall(function() autoFarmToggle:Set(false) end) end
@@ -646,11 +671,15 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 			State.AutoFarmActive = active
 			if active then
-				-- Solusi 1: Aktifkan No-Render Mode
-				Utils.EnableNoRenderMode()
+				print("🚀 [AutoFarm] Memulai Safe Platform & Membersihkan Map...")
+				if Utils.DestroyHeavyMaps then
+					Utils.DestroyHeavyMaps()
+				elseif Utils.StartGiantPlatform then
+					Utils.StartGiantPlatform()
+				end
 
 				task.spawn(function()
-					print("[AutoFarm] Memulai Siklus Pengantaran...")
+					print("▶️ [AutoFarm] Siklus Loop BCA Courier Dimulai...")
 					while State.AutoFarmActive do
 						if _G.MainCoreSession ~= Context.Session then break end
 
@@ -696,21 +725,25 @@ function BCA.Init(Window, Utils, Context, UICreate)
 							EnterDriverSeat(returnCar)
 							task.wait(Config.ActionDelay)
 							if not State.AutoFarmActive then break end
-							local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
-							local CarSpawner = Mf:WaitForChild("CAR_SPAWNER_NPC")
-							DriveCarNaturallyTo(returnCar, CarSpawner:GetPivot().Position, Config.TweenSpeed)
+							local Mf = GetBcaFolder()
+							local CarSpawner = Mf and Mf:FindFirstChild("CAR_SPAWNER_NPC")
+							if CarSpawner then
+								DriveCarNaturallyTo(returnCar, CarSpawner:GetPivot().Position, Config.TweenSpeed)
+							end
 							ExitDriverSeat(returnCar)
 						end
 						if not State.AutoFarmActive then break end
 
-						local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
-						local StartNpc = Mf:WaitForChild("NPC_START_JOB")
-						Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
-						task.wait(0.5)
+						local Mf = GetBcaFolder()
+						local StartNpc = Mf and Mf:FindFirstChild("NPC_START_JOB")
+						if StartNpc then
+							Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
+							task.wait(0.5)
 
-						local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
-						if prompt then prompt.Enabled = true end
-						Utils.TriggerPrompt(prompt, StartNpc.PrimaryPart or StartNpc:FindFirstChildWhichIsA("BasePart"))
+							local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
+							if prompt then prompt.Enabled = true end
+							Utils.TriggerPrompt(prompt, StartNpc.PrimaryPart or StartNpc:FindFirstChildWhichIsA("BasePart"))
+						end
 
 						local endWait = os.clock()
 						while State.Phase ~= "Unemployee" and (os.clock() - endWait < 10) do
@@ -724,7 +757,11 @@ function BCA.Init(Window, Utils, Context, UICreate)
 					Action_ResetAll()
 				end)
 			else
+				print("🛑 [AutoFarm] Menghentikan botting & platform.")
 				Action_ResetAll()
+				if Utils.StopGiantPlatform then
+					Utils.StopGiantPlatform()
+				end
 			end
 		end
 	})
