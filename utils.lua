@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - UTILITIES (NO-RENDER & COLLISION-SAFE MODE)
+-- CDID HUB - UTILITIES (TOTAL MAP & ROOT INVISIBLE MODE)
 -- ==============================================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -9,11 +9,34 @@ local VirtualUser = game:GetService("VirtualUser")
 local Utils = {}
 local LocalPlayer = Players.LocalPlayer
 
--- Solusi 1: Jadikan semua gedung invisible tanpa menghilangkan collision
-function Utils.EnableNoRenderMode()
-	print("⚡ [Performance Mode] Mengaktifkan No-Render Mode (Collision Tetap Utuh)...")
+-- Fungsi untuk membuat seluruh objek BasePart, Decal, Texture, & Mesh transparan total
+local function MakeObjectInvisible(instance)
+	if not instance then return end
 
-	-- 1. Matikan Lighting & Efek Berat
+	for _, obj in ipairs(instance:GetDescendants()) do
+		if obj:IsA("BasePart") then
+			obj.Transparency = 1
+			obj.CastShadow = false
+			obj.Material = Enum.Material.SmoothPlastic
+		elseif obj:IsA("Decal") or obj:IsA("Texture") then
+			obj.Transparency = 1
+		elseif obj:IsA("SurfaceAppearance") then
+			obj:Destroy()
+		end
+	end
+
+	-- Cek jika root-nya sendiri adalah BasePart
+	if instance:IsA("BasePart") then
+		instance.Transparency = 1
+		instance.CastShadow = false
+		instance.Material = Enum.Material.SmoothPlastic
+	end
+end
+
+function Utils.EnableNoRenderMode()
+	print("⚡ [Performance Mode] Membuat seluruh isi Workspace.Map & akarnya transparan...")
+
+	-- 1. Matikan Lighting & Efek Render Berat
 	Lighting.GlobalShadows = false
 	Lighting.FogEnd = 9e9
 	Lighting.Brightness = 1
@@ -24,47 +47,31 @@ function Utils.EnableNoRenderMode()
 		end
 	end
 
-	-- 2. Transparankan folder Gedung / Map Dekoratif
+	-- 2. Transparankan SELURUH isi Workspace.Map (Gedung, Jalan, Pohon, Dekorasi, Tanah, dll)
 	local map = Workspace:FindFirstChild("Map")
-	local buildings = map and map:FindFirstChild("Building")
-	if buildings then
-		for _, obj in ipairs(buildings:GetDescendants()) do
-			if obj:IsA("BasePart") then
-				obj.Transparency = 1
-				obj.CastShadow = false
-				obj.Material = Enum.Material.SmoothPlastic
-			elseif obj:IsA("Decal") or obj:IsA("Texture") then
-				obj.Transparency = 1
-			end
-		end
+	if map then
+		MakeObjectInvisible(map)
 	end
 
-	-- 3. Transparankan part dekorasi collab BCA (kecuali NPC, Job, dan ATM)
+	-- 3. Transparankan part collab BCA (Kecuali NPC, Job, dan ATM)
 	local myBcaCollab = Workspace:FindFirstChild("MY_BCA_COLLAB")
 	if myBcaCollab then
 		for _, item in ipairs(myBcaCollab:GetChildren()) do
 			local name = item.Name:lower()
-			if (name:find("building") or name:find("gedung") or name:find("tower")) and not name:find("npc") and not name:find("job") and not name:find("atm") then
-				for _, p in ipairs(item:GetDescendants()) do
-					if p:IsA("BasePart") then
-						p.Transparency = 1
-						p.CastShadow = false
-					elseif p:IsA("Decal") or p:IsA("Texture") then
-						p.Transparency = 1
-					end
-				end
+			if not name:find("npc") and not name:find("job") and not name:find("atm") then
+				MakeObjectInvisible(item)
 			end
 		end
 	end
 
-	-- 4. Matikan partikel visual
+	-- 4. Matikan partikel visual di Workspace
 	for _, obj in ipairs(Workspace:GetDescendants()) do
 		if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
 			obj.Enabled = false
 		end
 	end
 
-	print("✅ [Performance Mode] GPU rendering diminimalkan, collision aman.")
+	print("✅ [Performance Mode] Seluruh Map & sub-akarnya berhasil dibuat invisible total (Collision tetap aman).")
 end
 
 -- Teleport dengan pengamanan anchor
@@ -80,7 +87,7 @@ function Utils.SafeTeleportChar(targetCFrame, delayTime)
 	end
 end
 
--- Solusi 2: Interaksi Prompt dengan Freezing Anchor (Anti-Void)
+-- Interaksi Prompt dengan Freezing Anchor (Anti-Void)
 function Utils.TriggerPrompt(prompt, targetPart, isTrunk)
 	if not prompt then return false end
 	prompt.Enabled = true
@@ -103,7 +110,6 @@ function Utils.TriggerPrompt(prompt, targetPart, isTrunk)
 		task.wait(0.1)
 	end
 
-	-- Freeze sesaat selama trigger interaksi
 	hrp.Anchored = true
 
 	if fireproximityprompt then
