@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB INITIALIZER (LOBBY & GAMEPLAY SAFE)
+-- CDID HUB - MAIN INITIALIZER
 -- ==============================================================================
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -7,7 +7,7 @@ local StatsService = game:GetService("Stats")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
--- Bersihkan Sesi Lama
+-- Bersihkan Hook Sesi Sebelumnya
 if _G.MainCoreHooks then
 	for _, conn in ipairs(_G.MainCoreHooks) do pcall(function() conn:Disconnect() end) end
 end
@@ -21,11 +21,11 @@ local Context = {
 	Hooks = _G.MainCoreHooks
 }
 
--- Load Utilities
+-- Load Utils & Anti-AFK
 local Utils = _G.CDID_LoadModule("utils.lua")
 Utils.SetupAntiAFK()
 
--- Init WindUI Library
+-- Init WindUI
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -43,7 +43,7 @@ local Window = WindUI:CreateWindow({
 	}
 })
 
--- TAB 1: DASHBOARD & GLOBAL STATS
+-- DASHBOARD TAB
 local DashTab = Window:Tab({ Title = "Dashboard", Icon = "solar:home-2-bold" })
 local StatsSection = DashTab:Section({ Title = "System & Game Stats" })
 
@@ -52,7 +52,7 @@ local fpsParagraph = StatsSection:Paragraph({ Title = "Frame Rate (FPS)", Desc =
 local pingParagraph = StatsSection:Paragraph({ Title = "Ping Jaringan", Desc = "Membaca..." })
 local runtimeParagraph = StatsSection:Paragraph({ Title = "Runtime Hub", Desc = "00:00:00" })
 
--- Safe Saldo Listener (Hanya aktif jika ClientContainer sudah ada)
+-- Safe Saldo Listener (Non-blocking lobby check)
 task.spawn(function()
 	local function FormatRupiah(val)
 		if type(val) ~= 'number' then return tostring(val or '?') end
@@ -64,29 +64,28 @@ task.spawn(function()
 		if Context.Session ~= _G.MainCoreSession then break end
 
 		local clientCont = ReplicatedStorage:FindFirstChild("ClientContainer")
-		if clientCont then
-			local controller = clientCont:FindFirstChild("Controller")
-			local replicaMod = controller and controller:FindFirstChild("ReplicaController")
-			if replicaMod and not _G.MainCoreSaldoRegistered then
-				local ok, RC = pcall(require, replicaMod)
-				if ok and RC then
-					_G.MainCoreSaldoRegistered = true
-					RC.ReplicaOfClassCreated('Player_' .. LocalPlayer.UserId, function(replica)
-						local function update()
-							local c = replica.Data and replica.Data.Collab
-							local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
-							pcall(function() saldoParagraph:SetDesc(FormatRupiah(p)) end)
-						end
-						update()
-						replica:ListenToChange({'Collab'}, update)
-					end)
-				end
+		local controller = clientCont and clientCont:FindFirstChild("Controller")
+		local replicaMod = controller and controller:FindFirstChild("ReplicaController")
+
+		if replicaMod and not _G.MainCoreSaldoRegistered then
+			local ok, RC = pcall(require, replicaMod)
+			if ok and RC then
+				_G.MainCoreSaldoRegistered = true
+				RC.ReplicaOfClassCreated('Player_' .. LocalPlayer.UserId, function(replica)
+					local function update()
+						local c = replica.Data and replica.Data.Collab
+						local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
+						pcall(function() saldoParagraph:SetDesc(FormatRupiah(p)) end)
+					end
+					update()
+					replica:ListenToChange({'Collab'}, update)
+				end)
 			end
 		end
 	end
 end)
 
--- Monitor FPS, Ping, Runtime
+-- Performance Monitor (FPS, Ping, Runtime)
 task.spawn(function()
 	local FPS = {}
 	local sec = tick()
@@ -117,14 +116,14 @@ task.spawn(function()
 end)
 
 -- ==============================================================================
--- LOAD FITUR MODULES
+-- LOAD FEATURE & JOB MODULES
 -- ==============================================================================
--- 1. Server Manager (Bisa dipakai di Lobby maupun di dalam Game)
+-- 1. Server Manager
 local ServerModule = _G.CDID_LoadModule("server_manager.lua")
 ServerModule.Init(Window, Utils, Context)
 
--- 2. BCA Courier Auto Farm
+-- 2. BCA Courier
 local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
 BCAModule.Init(Window, Utils, Context)
 
-print("🚀 CDID Hub Berhasil Dimuat!")
+print("🚀 CDID Hub Loaded Successfully!")
