@@ -107,7 +107,7 @@ local ExpectedCarName = LocalPlayer.Name .. "sCar"
 
 -- CONFIGURABLE VALUES
 local Config = {
-	TweenSpeed = 70,        -- Kecepatan wajar CDID (~60-70 km/jam)
+	TweenSpeed = 180,        -- Kecepatan wajar CDID (~60-70 km/jam)
 	MinTravelDuration = 20, -- Durasi minimal anti-nerf (detik)
 	ActionDelay = 0.3,
 	LoopWait = 0.4,
