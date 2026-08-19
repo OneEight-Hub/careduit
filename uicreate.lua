@@ -19,11 +19,11 @@ function UICreate.CreateFloatingDashboard(titleText)
 	pcall(function() ScreenGui.Parent = CoreGui end)
 	if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
-	-- Main Frame
+	-- Main Frame (Dipertinggi untuk menampung metrik tambahan)
 	local MainFrame = Instance.new("Frame")
 	MainFrame.Name = "MainFrame"
-	MainFrame.Size = UDim2.new(0, 240, 0, 150)
-	MainFrame.Position = UDim2.new(0.02, 0, 0.35, 0)
+	MainFrame.Size = UDim2.new(0, 260, 0, 225)
+	MainFrame.Position = UDim2.new(0.02, 0, 0.3, 0)
 	MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
 	MainFrame.BackgroundTransparency = 0.15
 	MainFrame.BorderSizePixel = 0
@@ -54,7 +54,7 @@ function UICreate.CreateFloatingDashboard(titleText)
 	Title.Size = UDim2.new(1, -35, 1, 0)
 	Title.Position = UDim2.new(0, 10, 0, 0)
 	Title.BackgroundTransparency = 1
-	Title.Text = titleText or "BCA Courier Dashboard"
+	Title.Text = titleText or "BCA Courier Analytics"
 	Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 	Title.Font = Enum.Font.GothamBold
 	Title.TextSize = 12
@@ -87,7 +87,7 @@ function UICreate.CreateFloatingDashboard(titleText)
 	local function CreateRow(name, defaultVal)
 		local Row = Instance.new("Frame")
 		Row.Name = name
-		Row.Size = UDim2.new(1, 0, 0, 24)
+		Row.Size = UDim2.new(1, 0, 0, 23)
 		Row.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
 		Row.BackgroundTransparency = 0.5
 		Row.Parent = Content
@@ -110,7 +110,11 @@ function UICreate.CreateFloatingDashboard(titleText)
 		return Label
 	end
 
-	local saldoLabel = CreateRow("SaldoRow", "💰 Saldo: Rp 0")
+	-- Baris Data Analytics
+	local saldoAwalLabel = CreateRow("SaldoAwalRow", "🏦 Saldo Awal: Membaca...")
+	local currentSaldoLabel = CreateRow("CurrentSaldoRow", "💰 Current Saldo: Membaca...")
+	local earnedLabel = CreateRow("EarnedRow", "📈 Earned: +Rp 0")
+	local gajiTerakhirLabel = CreateRow("GajiRow", "💵 Gaji Terakhir: Rp 0")
 	local statusLabel = CreateRow("StatusRow", "📦 Status: Idle")
 	local tripsLabel = CreateRow("TripsRow", "🏁 Trips: 0 Selesai")
 
@@ -150,8 +154,20 @@ function UICreate.CreateFloatingDashboard(titleText)
 		ScreenGui.Enabled = visible
 	end
 
-	function DashboardHandle.UpdateSaldo(text)
-		if saldoLabel then saldoLabel.Text = "💰 Saldo: " .. tostring(text) end
+	function DashboardHandle.UpdateSaldoAwal(text)
+		if saldoAwalLabel then saldoAwalLabel.Text = "🏦 Saldo Awal: " .. tostring(text) end
+	end
+
+	function DashboardHandle.UpdateCurrentSaldo(text)
+		if currentSaldoLabel then currentSaldoLabel.Text = "💰 Current Saldo: " .. tostring(text) end
+	end
+
+	function DashboardHandle.UpdateEarned(text)
+		if earnedLabel then earnedLabel.Text = "📈 Earned: " .. tostring(text) end
+	end
+
+	function DashboardHandle.UpdateGajiTerakhir(text)
+		if gajiTerakhirLabel then gajiTerakhirLabel.Text = "💵 Gaji Terakhir: " .. tostring(text) end
 	end
 
 	function DashboardHandle.UpdateStatus(text)
