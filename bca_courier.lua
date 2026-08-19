@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (FULL STABLE & HYBRID SALDO TRACKER)
+-- CDID HUB - BCA COURIER (FULL STABLE, NO-RENDER & ANCHOR FREEZING)
 -- ==============================================================================
 local BCA = {}
 
@@ -43,9 +43,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	local Network = nil
 	local FloatingDash = nil
 
-	-- ==============================================================================
-	-- HELPER FUNCTIONS
-	-- ==============================================================================
 	local function FormatRupiah(val)
 		if type(val) ~= "number" then return tostring(val or "Rp 0") end
 		local r = string.format("%d", math.floor(val)):reverse():gsub("%d%d%d", "%1."):reverse():gsub("^%.", "")
@@ -411,7 +408,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	end)
 
 	-- ==============================================================================
-	-- AUTOFARM SEQUENCES
+	-- AUTOFARM SEQUENCES (DENGAN ANCHOR FREEZING SAAT INTERAKSI)
 	-- ==============================================================================
 	local function Action_StartJob()
 		local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
@@ -529,13 +526,20 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 					if not State.AutoDelivering then break end
 
+					-- Solusi 2: Freezing Anchor Tepat di Depan ATM Saat Minigame Berlangsung
 					if State.Carrying and State.TargetPos then
 						State.IsBusy = true
 						Utils.SafeTeleportChar(CFrame.new(State.TargetPos + Vector3.new(0, 0, 1.5)), Config.ActionDelay)
 						task.wait(Config.ActionDelay)
+
+						local curHum, curHrp = GetValidHumanoid()
+						if curHrp then curHrp.Anchored = true end
+
 						if Network then Network:FireServer("BankCourier", "FillStart") end
 						local waitFill = os.clock()
 						while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 25) do task.wait(Config.LoopWait / 2) end
+
+						if curHrp then curHrp.Anchored = false end
 						State.IsBusy = false
 						task.wait(Config.ActionDelay)
 					end
@@ -563,8 +567,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		if statusParagraph then pcall(function() statusParagraph:SetDesc("Phase: Unemployee | Koper: 0/0") end) end
 
 		pcall(function()
-			local hum = GetValidHumanoid()
+			local hum, hrp = GetValidHumanoid()
 			if hum and hum.Sit then hum.Sit = false end
+			if hrp then hrp.Anchored = false end
 			local car = GetPlayerCar()
 			if car and car.PrimaryPart then car.PrimaryPart.Anchored = false end
 		end)
@@ -641,8 +646,8 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 			State.AutoFarmActive = active
 			if active then
-				Utils.DestroyBuildingInstances()
-				Utils.EnablePerformanceMode()
+				-- Solusi 1: Aktifkan No-Render Mode
+				Utils.EnableNoRenderMode()
 
 				task.spawn(function()
 					print("[AutoFarm] Memulai Siklus Pengantaran...")
