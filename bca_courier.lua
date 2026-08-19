@@ -7,7 +7,21 @@ function BCA.Init(Window, Utils, Context)
 	local RunService = game:GetService("RunService")
 
 	local LocalPlayer = Players.LocalPlayer
-	local Network = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Network"))
+		-- Kode Baru (Dengan Timeout 10 detik dan proteksi pcall)
+	local ModulesFolder = ReplicatedStorage:WaitForChild("Modules", 10)
+	if not ModulesFolder then
+		warn("⚠️ [BCA Courier] Modules folder tidak ditemukan / belum siap.")
+		return
+	end
+	
+	local NetworkModule = ModulesFolder:WaitForChild("Network", 10)
+	if not NetworkModule then
+		warn("⚠️ [BCA Courier] Network module tidak ditemukan.")
+		return
+	end
+	
+	local Network = require(NetworkModule)
+	
 	local NpcDialogEvent = ReplicatedStorage:WaitForChild("NetworkContainer"):WaitForChild("RemoteEvents"):WaitForChild("NpcDialog")
 	local JobRemote = ReplicatedStorage:WaitForChild("NetworkContainer"):WaitForChild("RemoteEvents"):WaitForChild("Job")
 
