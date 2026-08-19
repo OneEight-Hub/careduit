@@ -158,7 +158,6 @@ local InfoTab = Window:Tab({
 local AntiAfkSection = InfoTab:Section({ Title = "Status Anti-AFK" })
 local StatsSection = InfoTab:Section({ Title = "Statistik Performa & Runtime" })
 
--- Forward declaration fungsi teleport
 local SafeTeleportChar
 
 TeleportSection:Button({
@@ -245,7 +244,7 @@ SafeTeleportChar = function(targetCFrame)
 	end
 end
 
--- Proximity Prompt Trigger (Aman tanpa freeze replikasi)
+-- Proximity Prompt Trigger
 local function TriggerPrompt(prompt, targetPart, isTrunk)
 	if not prompt then return false end
 
@@ -378,7 +377,7 @@ local function ExitDriverSeat(car)
 end
 
 -- ==============================================================================
--- SIMULASI MENGEMUDI HUMANIZED (ANTI-FLING & ANTI-NERF)
+-- SIMULASI MENGEMUDI HUMANIZED (ANTI-CRASH & ANTI-NERF)
 -- ==============================================================================
 local function DriveCarNaturallyTo(car, targetPos, speed)
 	speed = speed or Config.TweenSpeed
@@ -390,16 +389,21 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 	local hum = char and char:FindFirstChild("Humanoid")
 
 	local startCF = car:GetPivot()
-	local targetCF = CFrame.new(targetPos + Vector3.new(0, 1.8, 0), targetPos + Vector3.new(0, 1.8, 10))
-	local dist = (startCF.Position - targetCF.Position).Magnitude
 
+	-- Berhenti 14 stud sebelum titik ATM agar mobil tidak menabrak trotoar/bilik
+	local dirToAtm = (targetPos - startCF.Position).Unit
+	local flatDir = Vector3.new(dirToAtm.X, 0, dirToAtm.Z).Unit
+	local parkPos = targetPos - (flatDir * 14) + Vector3.new(0, 1.2, 0)
+	local targetCF = CFrame.new(parkPos, parkPos + flatDir)
+
+	local dist = (startCF.Position - parkPos).Magnitude
 	local calculatedDuration = dist / speed
 	local duration = math.max(Config.MinTravelDuration, calculatedDuration)
 
 	primary.Anchored = false
 
 	local startTime = os.clock()
-	print(string.format("🚗 [Safe Drive] Menyetir ke ATM (Jarak: %.0f stud | Durasi: %.1f dtk)...", dist, duration))
+	print(string.format("🚗 [Safe Park] Menyetir ke titik parkir ATM (Jarak: %.0f stud | Durasi: %.1f dtk)...", dist, duration))
 
 	while (os.clock() - startTime) < duration and State.AutoDelivering do
 		if hum and not hum.Sit and seat then
@@ -413,7 +417,7 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 		local currentSpeed = speed
 		if alpha > 0.85 then
 			local brakeFactor = (1 - alpha) / 0.15
-			currentSpeed = math.max(10, speed * brakeFactor)
+			currentSpeed = math.max(8, speed * brakeFactor)
 			if seat then
 				pcall(function() seat.ThrottleFloat = 0; seat.Throttle = 0 end)
 			end
@@ -699,8 +703,10 @@ local function RunDeliveryLoop()
 	task.spawn(function()
 		while State.AutoDelivering do
 			if _G.MainCoreSession ~= session then break end
-			if State.Phase == "Returning" or State.Phase == "Complete" then
-				print("✅ Rute pengiriman selesai!")
+
+			-- HANYA BERHENTI JIKA KOPER SUDAH BENAR-BENAR HABIS (ANTI-TURUN DI TENGAH JALAN)
+			if (State.Loaded <= 0 and not State.Carrying) or (State.Phase == "Returning" and State.Loaded <= 0) then
+				print("✅ Semua koper di bagasi telah selesai disetor ke ATM!")
 				State.AutoDelivering = false
 				break
 			end
@@ -709,23 +715,23 @@ local function RunDeliveryLoop()
 			local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
 			local ambilPrompt = GetAmbilPrompt(bagasiPoint)
 
-			if State.Phase == "Delivering" and car and not State.IsBusy then
+			if car and not State.IsBusy then
 				local char = LocalPlayer.Character
 				local hrp = char and char:FindFirstChild("HumanoidRootPart")
 				local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
-				-- 1. Naik mobil dan kendarai secara natural
-				if not State.Carrying and State.TargetPos and distToAtm > 35 then
+				-- 1. Naik mobil dan kendarai ke target ATM berikutnya jika jarak masih jauh
+				if not State.Carrying and State.TargetPos and distToAtm > 25 then
 					State.IsBusy = true
-					print("[+] Masuk ke Driver Seat...")
+					print(string.format("[+] Menuju target ATM berikutnya (Sisa koper di bagasi: %d)...", State.Loaded))
 					EnterDriverSeat(car)
 					task.wait(Config.ActionDelay)
 
 					if not State.AutoDelivering then State.IsBusy = false break end
 
-					DriveCarNaturallyTo(car, State.TargetPos + Vector3.new(0, 0, 10), Config.TweenSpeed)
+					DriveCarNaturallyTo(car, State.TargetPos, Config.TweenSpeed)
 
-					print("[+] Turun dari Driver Seat...")
+					print("[+] Tiba di parkiran ATM, turun dari kursi kemudi...")
 					ExitDriverSeat(car)
 					State.IsBusy = false
 				end
@@ -736,11 +742,13 @@ local function RunDeliveryLoop()
 				if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 40 then
 					State.IsBusy = true
 					print("[+] Mengambil koper dari bagasi...")
-					SafeTeleportChar(bagasiPoint.CFrame)
+					SafeTeleportChar(bagasiPoint.CFrame * CFrame.new(0, 0, 1.8))
+					task.wait(0.2)
+
 					TriggerPrompt(ambilPrompt, bagasiPoint, true)
 
 					local waitCarry = os.clock()
-					while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < Config.ActionDelay * 10) do
+					while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < Config.ActionDelay * 12) do
 						task.wait(Config.LoopWait / 2)
 					end
 					State.IsBusy = false
@@ -800,7 +808,6 @@ local function Action_ResetAll()
 	end
 	if statusParagraph then 
 		pcall(function() statusParagraph:SetDesc("Phase: Unemployee | Koper: 0/0") end)
-		pcall(function() statusParagraph:SetText("Phase: Unemployee | Koper: 0/0") end)
 	end
 
 	pcall(function()
@@ -884,7 +891,7 @@ autoFarmToggle = HomeSection:Toggle({
 					end
 					if not State.AutoFarmActive or _G.MainCoreSession ~= session then break end
 
-					-- 4. Antar Koper ke ATM dengan Timeout Safety
+					-- 4. Antar Koper ke ATM (Berdasarkan jumlah sisa koper)
 					State.AutoDelivering = true
 					RunDeliveryLoop()
 
@@ -1016,51 +1023,22 @@ Window.Frame.Destroying:Connect(function()
 	if _G.AntiAfkConnection then _G.AntiAfkConnection:Disconnect() _G.AntiAfkConnection = nil end
 end)
 
--- Cache TextLabel WindUI
-local _statusLabel = nil
-local _saldoLabel  = nil
-
-local function ScanWindUILabels()
-	for _, sg in ipairs(PlayerGui:GetChildren()) do
-		if sg:IsA('ScreenGui') then
-			for _, obj in ipairs(sg:GetDescendants()) do
-				if obj:IsA('TextLabel') then
-					if obj.Text == 'Phase: Unemployee | Koper: 0/0' then
-						_statusLabel = obj
-					elseif obj.Text == 'Membaca data...' then
-						_saldoLabel = obj
-					end
-				end
-			end
-		end
-	end
-end
-
-local function SetLabel(label, para, text)
-	if label and label.Parent then
-		label.Text = text
-		return
-	end
-	if para then
-		pcall(function() para:SetDesc(text) end)
-		pcall(function() para:SetText(text) end)
-	end
-end
-
-task.delay(1, ScanWindUILabels)
-
--- Polling Status & Saldo
+-- ==============================================================================
+-- 7. REAL-TIME WINDUI STATUS & SALDO UPDATER
+-- ==============================================================================
 task.spawn(function()
 	while task.wait(0.25) do
 		if _G.MainCoreSession ~= session then break end
-		local text = string.format('Phase: %s | Koper: %s/%s',
-			tostring(State.Phase), tostring(State.Loaded), tostring(State.Total))
-		if not _statusLabel or not _statusLabel.Parent then ScanWindUILabels() end
-		SetLabel(_statusLabel, statusParagraph, text)
+		
+		local statusText = string.format("Phase: %s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total))
+		pcall(function()
+			if statusParagraph then
+				statusParagraph:SetDesc(statusText)
+			end
+		end)
 	end
 end)
 
--- Polling Saldo BCA Pocket
 task.spawn(function()
 	local function GetSaldoText()
 		local container = PlayerGui:FindFirstChild('Container')
@@ -1098,11 +1076,19 @@ task.spawn(function()
 				local c = replica.Data and replica.Data.Collab
 				return c and c.MyBca2026 and c.MyBca2026.PocketRupiah
 			end
-			if not _saldoLabel or not _saldoLabel.Parent then ScanWindUILabels() end
-			SetLabel(_saldoLabel, saldoParagraph, FormatRupiah(GetPocket()))
+			
+			pcall(function()
+				if saldoParagraph then
+					saldoParagraph:SetDesc(FormatRupiah(GetPocket()))
+				end
+			end)
+			
 			replica:ListenToChange({'Collab'}, function()
-				if not _saldoLabel or not _saldoLabel.Parent then ScanWindUILabels() end
-				SetLabel(_saldoLabel, saldoParagraph, FormatRupiah(GetPocket()))
+				pcall(function()
+					if saldoParagraph then
+						saldoParagraph:SetDesc(FormatRupiah(GetPocket()))
+					end
+				end)
 			end)
 		end)
 	end
@@ -1111,14 +1097,17 @@ task.spawn(function()
 		if _G.MainCoreSession ~= session then break end
 		local guiText = GetSaldoText()
 		if guiText then
-			if not _saldoLabel or not _saldoLabel.Parent then ScanWindUILabels() end
-			SetLabel(_saldoLabel, saldoParagraph, guiText)
+			pcall(function()
+				if saldoParagraph then
+					saldoParagraph:SetDesc(guiText)
+				end
+			end)
 		end
 	end
 end)
 
 -- ==============================================================================
--- 7. STATS & RUNTIME MONITOR (FPS, PING, TIMER)
+-- 8. REAL-TIME STATS & RUNTIME MONITOR (FPS, PING, TIMER)
 -- ==============================================================================
 task.spawn(function()
 	local FPS = {}
@@ -1150,15 +1139,18 @@ task.spawn(function()
 				pingVal = math.floor((LocalPlayer:GetNetworkPing() or 0) * 1000)
 			end
 		end)
+		
 		pcall(function()
-			pingParagraph:SetDesc(string.format("%d ms", pingVal))
-			pingParagraph:SetText(string.format("%d ms", pingVal))
+			if pingParagraph then
+				pingParagraph:SetDesc(string.format("%d ms", pingVal))
+			end
 		end)
 
 		-- Update FPS
 		pcall(function()
-			fpsParagraph:SetDesc(string.format("%d FPS", currentFps))
-			fpsParagraph:SetText(string.format("%d FPS", currentFps))
+			if fpsParagraph then
+				fpsParagraph:SetDesc(string.format("%d FPS", currentFps))
+			end
 		end)
 
 		-- Update Runtime Timer
@@ -1169,10 +1161,11 @@ task.spawn(function()
 		local timeStr = string.format("%02d:%02d:%02d", hours, mins, secs)
 
 		pcall(function()
-			runtimeParagraph:SetDesc(timeStr)
-			runtimeParagraph:SetText(timeStr)
+			if runtimeParagraph then
+				runtimeParagraph:SetDesc(timeStr)
+			end
 		end)
 	end
 end)
 
-print("🎉 MainCore Humanized Auto-Farm & Anti-AFK Berhasil Diinisialisasi!")
+print("🎉 MainCore Stable Auto-Farm Berhasil Diperbarui!")
