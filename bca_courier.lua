@@ -1,3 +1,6 @@
+-- ==============================================================================
+-- CDID HUB - BCA COURIER AUTO FARM
+-- ==============================================================================
 local BCA = {}
 
 function BCA.Init(Window, Utils, Context)
@@ -232,16 +235,13 @@ function BCA.Init(Window, Utils, Context)
 	end
 
 	-- ==============================================================================
-	-- BACKGROUND LAZY INITIALIZER
+	-- LAZY INITIALIZER FOR MAP GAMEPLAY
 	-- ==============================================================================
 	task.spawn(function()
 		while not Workspace:FindFirstChild("MY_BCA_COLLAB") do
 			task.wait(1.5)
 			if Context.Session ~= _G.MainCoreSession then return end
 		end
-
-		Utils.DestroyBuildingInstances()
-		Utils.EnablePerformanceMode()
 
 		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
 		local netModule = modules and modules:WaitForChild("Network", 15)
@@ -255,7 +255,7 @@ function BCA.Init(Window, Utils, Context)
 		local JobRemote = remoteEvents and remoteEvents:WaitForChild("Job", 15)
 
 		if not Network or not NpcDialogEvent or not JobRemote then
-			warn("⚠️ [BCA Courier] Gagal menginisialisasi network remotes.")
+			warn("⚠️ [BCA Courier] Remotes Network belum siap.")
 			return
 		end
 
@@ -322,7 +322,7 @@ function BCA.Init(Window, Utils, Context)
 				State.Carrying = (arg4 == true)
 				print(string.format("📦 Status Koper: %s/%s | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
 
-			-- 1. Auto Perfect Minigame: Muat Koper
+			-- 1. Minigame: Muat Koper
 			elseif action == "LoadRound" and typeof(arg1) == "table" then
 				local greenSize = arg1.greenSize or arg1.greatSize or 0.18
 				local greenStart = arg1.greenStart or 0.5
@@ -353,7 +353,7 @@ function BCA.Init(Window, Utils, Context)
 					print("✅ [Minigame Koper] LoadPress PERFECT terkirim!")
 				end)
 
-			-- 2. Auto Perfect Minigame: Setor ATM
+			-- 2. Minigame: Setor ATM
 			elseif action == "SkillCheck" and typeof(arg1) == "table" then
 				local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
 				local targetAngle = arg1.zoneStart + (zoneWidth / 2)
@@ -383,7 +383,7 @@ function BCA.Init(Window, Utils, Context)
 
 			elseif action == "Complete" or action == "Returning" then
 				State.Phase = "Returning"
-				print("🏁 Semua ATM telah berhasil diisi!")
+				print("🏁 Semua ATM telah diisi!")
 
 			elseif action == "Stop" then
 				State.Phase = "Unemployee"
@@ -395,7 +395,7 @@ function BCA.Init(Window, Utils, Context)
 		table.insert(Context.Hooks, bankHook)
 
 		State.IsReady = true
-		print("✅ [BCA Courier] Event Listeners & Network Hook siap digunakan.")
+		print("✅ [BCA Courier] Event Listeners & Network Hook aktif.")
 	end)
 
 	-- ==============================================================================
@@ -689,6 +689,10 @@ function BCA.Init(Window, Utils, Context)
 
 			State.AutoFarmActive = active
 			if active then
+				-- Jalankan optimasi & cleaner hanya saat autofarm aktif
+				Utils.DestroyBuildingInstances()
+				Utils.EnablePerformanceMode()
+
 				task.spawn(function()
 					print("[AutoFarm] Memulai Siklus Pengantaran...")
 					while State.AutoFarmActive do
@@ -803,7 +807,6 @@ function BCA.Init(Window, Utils, Context)
 		Image = "info"
 	})
 
-	-- Loop Status Text
 	task.spawn(function()
 		while task.wait(0.25) do
 			if _G.MainCoreSession ~= Context.Session then break end
