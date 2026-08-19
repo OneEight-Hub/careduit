@@ -4,6 +4,8 @@ local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
+local StatsService = game:GetService("Stats")
 
 -- ==============================================================================
 -- 1. PENGHAPUSAN LANGSUNG (DESTROY) GEDUNG BCA SAAT AWAL EKSEKUSI
@@ -51,6 +53,11 @@ for _, conn in ipairs(_G.BCACourierHooks) do
 end
 _G.BCACourierHooks = {}
 
+if _G.AntiAfkConnection then
+	pcall(function() _G.AntiAfkConnection:Disconnect() end)
+	_G.AntiAfkConnection = nil
+end
+
 if _G.KoperLoaderHook then _G.KoperLoaderHook:Disconnect() _G.KoperLoaderHook = nil end
 if _G.DeliveryRunnerHook then _G.DeliveryRunnerHook:Disconnect() _G.DeliveryRunnerHook = nil end
 if _G.MainCoreHook then _G.MainCoreHook:Disconnect() _G.MainCoreHook = nil end
@@ -75,7 +82,7 @@ local ExpectedCarName = LocalPlayer.Name .. "sCar"
 
 -- CONFIGURABLE VALUES
 local Config = {
-	TweenSpeed = 180,        -- Kecepatan wajar agar tidak mental (studs/s)
+	TweenSpeed = 180,        -- Kecepatan wajar CDID (~60-70 km/jam)
 	MinTravelDuration = 20, -- Durasi minimal anti-nerf (detik)
 	ActionDelay = 0.3,
 	LoopWait = 0.4,
@@ -95,14 +102,26 @@ local State = {
 	AutoLoading = false,
 	AutoDelivering = false,
 	LoadingActive = false,
-	DeliveryActive = false
+	DeliveryActive = false,
+	AntiAfkActive = true
 }
+
+-- ==============================================================================
+-- 3. FITUR ANTI-AFK OTOMATIS (VIRTUALUSER HOOK)
+-- ==============================================================================
+_G.AntiAfkConnection = LocalPlayer.Idled:Connect(function()
+	if State.AntiAfkActive then
+		VirtualUser:CaptureController()
+		VirtualUser:ClickButton2(Vector2.new(0, 0))
+		print("🛡️ [Anti-AFK] Berhasil menembak VirtualUser input pencegah idle kick.")
+	end
+end)
 
 -- ─── LOAD WINDUI LIBRARY ───
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
 local Window = WindUI:CreateWindow({
-	Title = "BCA Courier Auto-Farm (Stable)",
+	Title = "BCA Courier Auto-Farm",
 	Author = "by ASRock",
 	Folder = "bca_courier",
 	Icon = "solar:folder-2-bold-duotone",
@@ -116,22 +135,90 @@ local Window = WindUI:CreateWindow({
 	}
 })
 
+-- TAB 1: MAIN COURIER HUB
 local MainTab = Window:Tab({
 	Title = "Courier Hub",
 	Icon = "solar:home-2-bold"
 })
+local HomeSection = MainTab:Section({ Title = "Auto Farm Controls" })
+local SettingsSection = MainTab:Section({ Title = "Konfigurasi Kecepatan & Anti-Nerf" })
 
-local HomeSection = MainTab:Section({
-	Title = "Auto Farm Controls"
+-- TAB 2: PINTASAN TELEPORT
+local TeleportTab = Window:Tab({
+	Title = "Pintasan Teleport",
+	Icon = "solar:map-point-bold-duotone"
+})
+local TeleportSection = TeleportTab:Section({ Title = "Shortcuts Teleport Karakter" })
+
+-- TAB 3: SYSTEM INFO & ANTI-AFK
+local InfoTab = Window:Tab({
+	Title = "Status & Anti-AFK",
+	Icon = "solar:shield-check-bold-duotone"
+})
+local AntiAfkSection = InfoTab:Section({ Title = "Status Anti-AFK" })
+local StatsSection = InfoTab:Section({ Title = "Statistik Performa & Runtime" })
+
+-- Forward declaration fungsi teleport
+local SafeTeleportChar
+
+TeleportSection:Button({
+	Title = "Teleport ke NPC Start (Lobby)",
+	Desc = "Teleport instan ke dekat NPC pendaftaran kurir.",
+	Callback = function()
+		local StartNpc = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("NPC_START_JOB")
+		SafeTeleportChar(StartNpc:GetPivot())
+		print("📍 Teleportasi ke NPC Start selesai.")
+	end
 })
 
-local SettingsSection = MainTab:Section({
-	Title = "Konfigurasi Kecepatan & Anti-Nerf"
+TeleportSection:Button({
+	Title = "Teleport ke Spawner Mobil",
+	Desc = "Teleport instan ke petugas parkir kendaraan bank.",
+	Callback = function()
+		local CarSpawner = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("CAR_SPAWNER_NPC")
+		SafeTeleportChar(CarSpawner:GetPivot())
+		print("📍 Teleportasi ke Spawner Mobil selesai.")
+	end
+})
+
+TeleportSection:Button({
+	Title = "Teleport ke Rak Koper",
+	Desc = "Teleport instan ke area tumpukan koper BCA.",
+	Callback = function()
+		local KoperSpawn = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("Job"):WaitForChild("BankCourier"):WaitForChild("KoperSpawn")
+		SafeTeleportChar(KoperSpawn:GetPivot())
+		print("📍 Teleportasi ke Rak Koper selesai.")
+	end
 })
 
 local autoFarmToggle
 local statusParagraph
 local saldoParagraph
+
+-- Info Tab Elements
+local antiAfkParagraph = AntiAfkSection:Paragraph({
+	Title = "Status Sistem Anti-AFK",
+	Desc = "🛡️ Status: AKTIF (Auto VirtualUser Input)",
+	Image = "shield"
+})
+
+local pingParagraph = StatsSection:Paragraph({
+	Title = "Ping Jaringan",
+	Desc = "Membaca...",
+	Image = "wifi"
+})
+
+local fpsParagraph = StatsSection:Paragraph({
+	Title = "Frame Rate (FPS)",
+	Desc = "Membaca...",
+	Image = "monitor"
+})
+
+local runtimeParagraph = StatsSection:Paragraph({
+	Title = "Total Runtime Script",
+	Desc = "00:00:00",
+	Image = "clock"
+})
 
 -- Helper Reset Kamera
 local function ResetPlayerCamera()
@@ -145,38 +232,8 @@ local function ResetPlayerCamera()
 	end
 end
 
--- Helper Fly System (Hanya aktif saat dibutuhkan)
-local function UpdateCharacterFly(active)
-	local char = LocalPlayer.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	local hum = char and char:FindFirstChild("Humanoid")
-	if not hrp or not hum then return end
-
-	local oldBv = hrp:FindFirstChild("MainCoreFlyVelocity")
-	local oldBg = hrp:FindFirstChild("MainCoreFlyGyro")
-	if oldBv then oldBv:Destroy() end
-	if oldBg then oldBg:Destroy() end
-
-	if active and not hum.Sit then
-		hum.PlatformStand = true
-		local bv = Instance.new("BodyVelocity")
-		bv.Name = "MainCoreFlyVelocity"
-		bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-		bv.Velocity = Vector3.new(0, 0, 0)
-		bv.Parent = hrp
-
-		local bg = Instance.new("BodyGyro")
-		bg.Name = "MainCoreFlyGyro"
-		bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-		bg.CFrame = hrp.CFrame
-		bg.Parent = hrp
-	else
-		hum.PlatformStand = false
-	end
-end
-
-local function SafeTeleportChar(targetCFrame)
-	UpdateCharacterFly(false)
+-- Helper Teleport Halus
+SafeTeleportChar = function(targetCFrame)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	if hrp then
@@ -188,7 +245,7 @@ local function SafeTeleportChar(targetCFrame)
 	end
 end
 
--- Proximity Prompt Trigger (Tanpa Anchor agar Server Tidak Menolak Interaksi)
+-- Proximity Prompt Trigger (Aman tanpa freeze replikasi)
 local function TriggerPrompt(prompt, targetPart, isTrunk)
 	if not prompt then return false end
 
@@ -199,8 +256,6 @@ local function TriggerPrompt(prompt, targetPart, isTrunk)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	if not hrp then return false end
-
-	UpdateCharacterFly(false)
 
 	if targetPart then
 		hrp.Anchored = false
@@ -256,9 +311,8 @@ local function GetAmbilPrompt(bagasiPoint)
 	return nil
 end
 
--- Helper Naik Driver Seat (Stabil & Mengunci Duduk)
+-- Helper Duduk di Driver Seat
 local function EnterDriverSeat(car)
-	UpdateCharacterFly(false)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	local hum = char:WaitForChild("Humanoid", 5)
@@ -324,7 +378,7 @@ local function ExitDriverSeat(car)
 end
 
 -- ==============================================================================
--- SIMULASI MENGEMUDI HUMANIZED (ANTI-FLING & ANTI-FALL)
+-- SIMULASI MENGEMUDI HUMANIZED (ANTI-FLING & ANTI-NERF)
 -- ==============================================================================
 local function DriveCarNaturallyTo(car, targetPos, speed)
 	speed = speed or Config.TweenSpeed
@@ -336,7 +390,6 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 	local hum = char and char:FindFirstChild("Humanoid")
 
 	local startCF = car:GetPivot()
-	-- Offset Y 1.8 stud agar ban tepat di aspal tanpa tembus
 	local targetCF = CFrame.new(targetPos + Vector3.new(0, 1.8, 0), targetPos + Vector3.new(0, 1.8, 10))
 	local dist = (startCF.Position - targetCF.Position).Magnitude
 
@@ -346,10 +399,9 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 	primary.Anchored = false
 
 	local startTime = os.clock()
-	print(string.format("🚗 [Drive Safe] Melaju ke ATM (Jarak: %.0f stud | Durasi: %.1f dtk)...", dist, duration))
+	print(string.format("🚗 [Safe Drive] Menyetir ke ATM (Jarak: %.0f stud | Durasi: %.1f dtk)...", dist, duration))
 
 	while (os.clock() - startTime) < duration and State.AutoDelivering do
-		-- FAIL-SAFE: Jika karakter terlempar dari kursi di tengah jalan, dudukkan kembali
 		if hum and not hum.Sit and seat then
 			pcall(function() seat:Sit(hum) end)
 		end
@@ -387,7 +439,6 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 		end)
 	end
 
-	-- Netralkan sisa energi kinetik sebelum di-anchor
 	for _, p in ipairs(car:GetDescendants()) do
 		if p:IsA("BasePart") then
 			p.AssemblyLinearVelocity = Vector3.zero
@@ -409,7 +460,7 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 end
 
 -- ==============================================================================
--- 3. HOOKS EVENT NETWORK & AUTO-WIN MINIGAMES
+-- 4. HOOKS EVENT NETWORK & AUTO PERFECT MINIGAMES
 -- ==============================================================================
 _G.MainCoreDialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, data)
 	if action == "Start" then
@@ -541,7 +592,7 @@ end)
 table.insert(_G.BCACourierHooks, _G.MainCoreHook)
 
 -- ==============================================================================
--- 4. AUTOFARM SEQUENCES
+-- 5. AUTOFARM SEQUENCES
 -- ==============================================================================
 local function Action_StartJob()
 	local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
@@ -722,7 +773,6 @@ local function RunDeliveryLoop()
 end
 
 local function Action_ResetAll()
-	UpdateCharacterFly(false)
 	if not State.AutoFarmActive and _G.MainCoreSession == session then
 		return
 	end
@@ -772,7 +822,7 @@ local function Action_ResetAll()
 end
 
 -- ==============================================================================
--- 5. WINDUI TOGGLE & CONTROLS
+-- 6. WINDUI TOGGLE & CONTROLS
 -- ==============================================================================
 autoFarmToggle = HomeSection:Toggle({
 	Title = "Endless Auto Farm",
@@ -905,7 +955,7 @@ saldoParagraph = HomeSection:Paragraph({
 
 SettingsSection:Input({
 	Title = "Kecepatan Mengemudi (Speed)",
-	Desc = "Kecepatan wajar CDID (studs/detik).",
+	Desc = "Masukkan kecepatan wajar CDID (studs/detik).",
 	Value = tostring(Config.TweenSpeed),
 	Placeholder = "Contoh: 70",
 	Callback = function(val)
@@ -963,7 +1013,7 @@ Window.Frame.Destroying:Connect(function()
 	if _G.MainCoreHook then _G.MainCoreHook:Disconnect() _G.MainCoreHook = nil end
 	if _G.MainCoreDialogHook then _G.MainCoreDialogHook:Disconnect() _G.MainCoreDialogHook = nil end
 	if _G.MainCoreJobHook then _G.MainCoreJobHook:Disconnect() _G.MainCoreJobHook = nil end
-	UpdateCharacterFly(false)
+	if _G.AntiAfkConnection then _G.AntiAfkConnection:Disconnect() _G.AntiAfkConnection = nil end
 end)
 
 -- Cache TextLabel WindUI
@@ -1010,6 +1060,7 @@ task.spawn(function()
 	end
 end)
 
+-- Polling Saldo BCA Pocket
 task.spawn(function()
 	local function GetSaldoText()
 		local container = PlayerGui:FindFirstChild('Container')
@@ -1066,4 +1117,62 @@ task.spawn(function()
 	end
 end)
 
-print("🎉 MainCore Stable Auto-Farm Berhasil Diinisialisasi!")
+-- ==============================================================================
+-- 7. STATS & RUNTIME MONITOR (FPS, PING, TIMER)
+-- ==============================================================================
+task.spawn(function()
+	local FPS = {}
+	local sec = tick()
+	local currentFps = 60
+
+	RunService.RenderStepped:Connect(function()
+		local fr = tick()
+		for index = #FPS, 1, -1 do
+			FPS[index + 1] = (FPS[index] >= fr - 1) and FPS[index] or nil
+		end
+		FPS[1] = fr
+		local fpsCalc = (tick() - sec >= 1 and #FPS) or (#FPS / (tick() - sec))
+		currentFps = math.floor(fpsCalc)
+	end)
+
+	local startTime = os.clock()
+
+	while task.wait(1) do
+		if _G.MainCoreSession ~= session then break end
+
+		-- Update Ping
+		local pingVal = 0
+		pcall(function()
+			local perf = StatsService:FindFirstChild("PerformanceStats")
+			if perf and perf:FindFirstChild("Ping") then
+				pingVal = math.floor(perf.Ping:GetValue())
+			else
+				pingVal = math.floor((LocalPlayer:GetNetworkPing() or 0) * 1000)
+			end
+		end)
+		pcall(function()
+			pingParagraph:SetDesc(string.format("%d ms", pingVal))
+			pingParagraph:SetText(string.format("%d ms", pingVal))
+		end)
+
+		-- Update FPS
+		pcall(function()
+			fpsParagraph:SetDesc(string.format("%d FPS", currentFps))
+			fpsParagraph:SetText(string.format("%d FPS", currentFps))
+		end)
+
+		-- Update Runtime Timer
+		local elapsed = math.floor(os.clock() - startTime)
+		local hours = math.floor(elapsed / 3600)
+		local mins = math.floor((elapsed % 3600) / 60)
+		local secs = elapsed % 60
+		local timeStr = string.format("%02d:%02d:%02d", hours, mins, secs)
+
+		pcall(function()
+			runtimeParagraph:SetDesc(timeStr)
+			runtimeParagraph:SetText(timeStr)
+		end)
+	end
+end)
+
+print("🎉 MainCore Humanized Auto-Farm & Anti-AFK Berhasil Diinisialisasi!")
