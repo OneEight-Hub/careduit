@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (ACCURATE PHONE GUI SALDO FETCHER)
+-- CDID HUB - BCA COURIER (EVENT-TRIGGERED SALDO FETCHER)
 -- ==============================================================================
 local BCA = {}
 
@@ -227,7 +227,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	end
 
 	-- ==============================================================================
-	-- POCKET SALDO FETCHER (FIRE REMOTE -> BACA PHONE GUI -> DISABLE PHONE GUI)
+	-- POCKET SALDO FETCHER (TRIGGER SAAT AWAL & SELESAI JOB)
 	-- ==============================================================================
 	local function FetchPocketSaldo()
 		task.spawn(function()
@@ -241,9 +241,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			end
 
 			-- Beri jeda data sync ke GUI
-			task.wait(0.35)
+			task.wait(0.4)
 
-			-- 2. Ambil nilai Saldo Text
+			-- 2. Ambil nilai Saldo Text dari ACTUAL NEW PHONE
 			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
 			if not pGui then return end
 
@@ -267,7 +267,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				saldoLabel = (btn and btn:FindFirstChild("Saldo")) or (ep and ep:FindFirstChild("Saldo"))
 			end)
 
-			-- Fallback pencarian instan jika nama path ada variasi
+			-- Fallback pencarian instan jika nama path memiliki variasi
 			if not saldoLabel then
 				for _, desc in ipairs(phoneGui:GetDescendants()) do
 					if desc:IsA("TextLabel") and desc.Name == "Saldo" and desc.Text:find("Rp") then
@@ -284,7 +284,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				end
 			end
 
-			-- 3. Sembunyikan GUI HP agar tidak memenuhi layar
+			-- 3. Sembunyikan GUI HP
 			pcall(function()
 				phoneGui.Enabled = false
 			end)
@@ -300,13 +300,8 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			if Context.Session ~= _G.MainCoreSession then return end
 		end
 
-		-- Loop Background Pengambilan Saldo Setiap 4 Detik
-		task.spawn(function()
-			while task.wait(4) do
-				if Context.Session ~= _G.MainCoreSession then break end
-				FetchPocketSaldo()
-			end
-		end)
+		-- PANGGIL 1x DI AWAL LOAD
+		FetchPocketSaldo()
 
 		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
 		local netModule = modules and modules:WaitForChild("Network", 15)
@@ -339,7 +334,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 					State.Phase = "Unemployee"
 					State.Loaded = 0
 					State.Total = 0
-					FetchPocketSaldo()
 				end
 			end
 		end)
@@ -349,7 +343,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			if action == "Start" then
 				State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
 				State.Phase = "Loading"
-				FetchPocketSaldo()
 
 			elseif action == "Phase" then
 				State.Phase = arg1
@@ -401,7 +394,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 			elseif action == "Complete" or action == "Returning" then
 				State.Phase = "Returning"
-				FetchPocketSaldo()
 
 			elseif action == "Stop" then
 				State.Phase = "Unemployee"
@@ -409,6 +401,8 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				State.Total = 0
 				State.TotalTrips = State.TotalTrips + 1
 				if FloatingDash then FloatingDash.UpdateTrips(State.TotalTrips) end
+
+				-- AMBIL SALDO SAAT SELESAI JOB
 				FetchPocketSaldo()
 			end
 		end)
@@ -750,6 +744,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 							if _G.MainCoreSession ~= Context.Session or not State.AutoFarmActive then return end
 							task.wait(Config.LoopWait / 2)
 						end
+
+						-- AMBIL SALDO SAAT SELESAI JOB & KLAIM GAJI
+						FetchPocketSaldo()
 
 						task.wait(Config.RestartDelay)
 					end
