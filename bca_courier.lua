@@ -1,16 +1,15 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (WITH SUB-WINDOW DASHBOARD)
+-- CDID HUB - BCA COURIER (INTEGRATED WITH UICREATE FLOATING DASHBOARD)
 -- ==============================================================================
 local BCA = {}
 
-function BCA.Init(Window, Utils, Context, WindUI)
+function BCA.Init(Window, Utils, Context, UICreate)
 	local Players = game:GetService("Players")
 	local ReplicatedStorage = game:GetService("ReplicatedStorage")
 	local Workspace = game:GetService("Workspace")
 	local RunService = game:GetService("RunService")
 	local LocalPlayer = Players.LocalPlayer
 
-	-- CONFIGURABLE VALUES
 	local Config = {
 		TweenSpeed = 180,
 		MinTravelDuration = 20,
@@ -19,7 +18,6 @@ function BCA.Init(Window, Utils, Context, WindUI)
 		RestartDelay = 2.0
 	}
 
-	-- STATE & STATS
 	local State = {
 		Total = 0,
 		Loaded = 0,
@@ -33,38 +31,35 @@ function BCA.Init(Window, Utils, Context, WindUI)
 		AutoDelivering = false,
 		LoadingActive = false,
 		DeliveryActive = false,
-		IsReady = false,
 
-		-- Statistik Sesi BCA
-		TotalCompletedTrips = 0,
-		CurrentSaldoPocket = 0
+		TotalTrips = 0,
+		CurrentSaldoText = "Membaca..."
 	}
 
 	local autoFarmToggle
 	local statusParagraph
 	local Network = nil
+	local FloatingDash = nil
 
-	-- Sub-Window References
-	local BCADashboardWindow = nil
-	local popupSaldoParagraph = nil
-	local popupStatusParagraph = nil
-	local popupTripsParagraph = nil
-
-	-- Helper Format Rupiah
 	local function FormatRupiah(val)
 		if type(val) ~= 'number' then return tostring(val or 'Rp 0') end
 		local r = string.format('%d', math.floor(val)):reverse():gsub('%d%d%d','%1.'):reverse():gsub('^%.','')
 		return 'Rp ' .. r
 	end
 
-	-- ==============================================================================
-	-- HELPER FUNCTIONS
-	-- ==============================================================================
-	local function ResetPlayerCamera()
+	local function GetValidHumanoid()
 		local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-		local hum = char:WaitForChild("Humanoid", 5)
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			return hum, char:FindFirstChild("HumanoidRootPart")
+		end
+		return nil, nil
+	end
+
+	local function ResetPlayerCamera()
+		local hum = GetValidHumanoid()
 		local camera = Workspace.CurrentCamera
-		if camera then
+		if camera and hum then
 			camera.CameraType = Enum.CameraType.Custom
 			camera.CameraSubject = hum
 			camera.FieldOfView = 70
@@ -75,9 +70,7 @@ function BCA.Init(Window, Utils, Context, WindUI)
 		local vehicles = Workspace:FindFirstChild("Vehicles")
 		if not vehicles then return nil end
 		for _, v in ipairs(vehicles:GetChildren()) do
-			if v.Name:find(LocalPlayer.Name, 1, true) then
-				return v
-			end
+			if v.Name:find(LocalPlayer.Name, 1, true) then return v end
 		end
 		return nil
 	end
@@ -103,9 +96,8 @@ function BCA.Init(Window, Utils, Context, WindUI)
 	end
 
 	local function EnterDriverSeat(car)
-		local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-		local hrp = char:WaitForChild("HumanoidRootPart", 5)
-		local hum = char:WaitForChild("Humanoid", 5)
+		local hum, hrp = GetValidHumanoid()
+		if not hum or not hrp then return false end
 
 		local seat = car:FindFirstChildWhichIsA("VehicleSeat", true) 
 			or car:FindFirstChild("DriveSeat", true) 
@@ -131,34 +123,28 @@ function BCA.Init(Window, Utils, Context, WindUI)
 			if fireproximityprompt then 
 				fireproximityprompt(drivePrompt) 
 			else
-				seat:Sit(hum)
+				pcall(function() seat:Sit(hum) end)
 			end
 			drivePrompt:InputHoldBegin()
 			task.wait(drivePrompt.HoldDuration + 0.1)
 			drivePrompt:InputHoldEnd()
 		else
-			seat:Sit(hum)
+			pcall(function() seat:Sit(hum) end)
 		end
 
 		local timeout = os.clock()
-		while not hum.Sit and (os.clock() - timeout < 2.5) do
-			task.wait(0.1)
-		end
-
+		while not hum.Sit and (os.clock() - timeout < 2.5) do task.wait(0.1) end
 		return hum.Sit
 	end
 
 	local function ExitDriverSeat(car)
-		local char = LocalPlayer.Character
-		local hum = char and char:FindFirstChild("Humanoid")
+		local hum = GetValidHumanoid()
 		if hum and hum.Sit then
 			hum.Sit = false
 			task.wait(Config.ActionDelay)
 		end
-
-		if car then
-			local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
-			if primary then primary.Anchored = true end
+		if car and car.PrimaryPart then
+			car.PrimaryPart.Anchored = true
 		end
 	end
 
@@ -167,9 +153,6 @@ function BCA.Init(Window, Utils, Context, WindUI)
 		local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
 		local seat = car:FindFirstChildWhichIsA("VehicleSeat", true)
 		if not primary then return end
-
-		local char = LocalPlayer.Character
-		local hum = char and char:FindFirstChild("Humanoid")
 
 		local startCF = car:GetPivot()
 		local dirToAtm = (targetPos - startCF.Position).Unit
@@ -182,9 +165,9 @@ function BCA.Init(Window, Utils, Context, WindUI)
 
 		primary.Anchored = false
 		local startTime = os.clock()
-		print(string.format("🚗 [Safe Park] Menyetir ke titik parkir ATM (Jarak: %.0f stud | Durasi: %.1f dtk)...", dist, duration))
 
 		while (os.clock() - startTime) < duration and State.AutoDelivering do
+			local hum = GetValidHumanoid()
 			if hum and not hum.Sit and seat then
 				pcall(function() seat:Sit(hum) end)
 			end
@@ -192,8 +175,8 @@ function BCA.Init(Window, Utils, Context, WindUI)
 			local elapsed = os.clock() - startTime
 			local alpha = math.clamp(elapsed / duration, 0, 1)
 			local currentCF = startCF:Lerp(targetCF, alpha)
-
 			local currentSpeed = speed
+
 			if alpha > 0.85 then
 				local brakeFactor = (1 - alpha) / 0.15
 				currentSpeed = math.max(8, speed * brakeFactor)
@@ -205,7 +188,6 @@ function BCA.Init(Window, Utils, Context, WindUI)
 			car:PivotTo(currentCF)
 			primary.AssemblyLinearVelocity = currentCF.LookVector * currentSpeed
 			primary.AssemblyAngularVelocity = Vector3.zero
-
 			RunService.Heartbeat:Wait()
 		end
 
@@ -230,16 +212,13 @@ function BCA.Init(Window, Utils, Context, WindUI)
 		task.wait(Config.ActionDelay)
 	end
 
-	-- ==============================================================================
 	-- LAZY INITIALIZER & SALDO TRACKER
-	-- ==============================================================================
 	task.spawn(function()
 		while not Workspace:FindFirstChild("MY_BCA_COLLAB") do
 			task.wait(1.5)
 			if Context.Session ~= _G.MainCoreSession then return end
 		end
 
-		-- Saldo Replica Tracker
 		local clientCont = ReplicatedStorage:WaitForChild("ClientContainer", 15)
 		if clientCont then
 			local controller = clientCont:WaitForChild("Controller", 15)
@@ -252,20 +231,16 @@ function BCA.Init(Window, Utils, Context, WindUI)
 							local c = data and data.Collab
 							local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
 							if p then
-								State.CurrentSaldoPocket = p
-								if popupSaldoParagraph then
-									pcall(function() popupSaldoParagraph:SetDesc(FormatRupiah(p)) end)
-								end
+								State.CurrentSaldoText = FormatRupiah(p)
+								if FloatingDash then FloatingDash.UpdateSaldo(State.CurrentSaldoText) end
 							end
 						end
 						update(replica.Data)
 						replica:ListenToChange({'Collab'}, function(newCollab)
 							local p = newCollab and newCollab.MyBca2026 and newCollab.MyBca2026.PocketRupiah
 							if p then
-								State.CurrentSaldoPocket = p
-								if popupSaldoParagraph then
-									pcall(function() popupSaldoParagraph:SetDesc(FormatRupiah(p)) end)
-								end
+								State.CurrentSaldoText = FormatRupiah(p)
+								if FloatingDash then FloatingDash.UpdateSaldo(State.CurrentSaldoText) end
 							end
 						end)
 					end)
@@ -369,20 +344,14 @@ function BCA.Init(Window, Utils, Context, WindUI)
 				State.Phase = "Unemployee"
 				State.Loaded = 0
 				State.Total = 0
-				State.TotalCompletedTrips = State.TotalCompletedTrips + 1
-				if popupTripsParagraph then
-					pcall(function() popupTripsParagraph:SetDesc(string.format("%d Pengantaran Selesai", State.TotalCompletedTrips)) end)
-				end
+				State.TotalTrips = State.TotalTrips + 1
+				if FloatingDash then FloatingDash.UpdateTrips(State.TotalTrips) end
 			end
 		end)
 		table.insert(Context.Hooks, bankHook)
-
-		State.IsReady = true
 	end)
 
-	-- ==============================================================================
-	-- AUTOFARM SEQUENCES
-	-- ==============================================================================
+	-- AUTOFARM ACTIONS
 	local function Action_StartJob()
 		local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
 		local StartNpc = Mf:WaitForChild("NPC_START_JOB")
@@ -472,8 +441,7 @@ function BCA.Init(Window, Utils, Context, WindUI)
 				local ambilPrompt = GetAmbilPrompt(bagasiPoint)
 
 				if car and not State.IsBusy then
-					local char = LocalPlayer.Character
-					local hrp = char and char:FindFirstChild("HumanoidRootPart")
+					local hum, hrp = GetValidHumanoid()
 					local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
 					if not State.Carrying and State.TargetPos and distToAtm > 25 then
@@ -534,90 +502,38 @@ function BCA.Init(Window, Utils, Context, WindUI)
 		if statusParagraph then pcall(function() statusParagraph:SetDesc("Phase: Unemployee | Koper: 0/0") end) end
 
 		pcall(function()
-			local char = LocalPlayer.Character
-			local hum = char and char:FindFirstChild("Humanoid")
+			local hum = GetValidHumanoid()
 			if hum and hum.Sit then hum.Sit = false end
 			local car = GetPlayerCar()
 			if car and car.PrimaryPart then car.PrimaryPart.Anchored = false end
 		end)
 	end
 
-	-- ==============================================================================
-	-- POPUP SUB-WINDOW: DASHBOARD KHUSUS BCA
-	-- ==============================================================================
-	local function OpenBCADashboard()
-		if BCADashboardWindow then
-			return
-		end
-
-		BCADashboardWindow = WindUI:CreateWindow({
-			Title = "BCA Courier Analytics",
-			Author = "by ASRock",
-			Folder = "bca_dashboard",
-			Icon = "solar:wallet-money-bold-duotone",
-			NewElements = true,
-			HideSearchBar = true,
-			OpenButton = {
-				Title = "BCA Dashboard",
-				Enabled = false
-			}
-		})
-
-		local DashTab = BCADashboardWindow:Tab({ Title = "BCA Stats", Icon = "solar:chart-bold" })
-		local MainSec = DashTab:Section({ Title = "Informasi BCA Pocket & Pekerjaan" })
-
-		popupSaldoParagraph = MainSec:Paragraph({
-			Title = "Saldo BCA Pocket",
-			Desc = State.CurrentSaldoPocket > 0 and FormatRupiah(State.CurrentSaldoPocket) or "Membaca Saldo...",
-			Image = "wallet"
-		})
-
-		popupStatusParagraph = MainSec:Paragraph({
-			Title = "Status Aktivitas",
-			Desc = string.format("Phase: %s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total)),
-			Image = "box"
-		})
-
-		popupTripsParagraph = MainSec:Paragraph({
-			Title = "Total Trip Sukses",
-			Desc = string.format("%d Pengantaran Selesai", State.TotalCompletedTrips),
-			Image = "check-circle"
-		})
-
-		MainSec:Button({
-			Title = "Tutup Dashboard Ini",
-			Desc = "Menutup jendela analitik BCA.",
-			Callback = function()
-				if BCADashboardWindow and BCADashboardWindow.Frame then
-					BCADashboardWindow.Frame:Destroy()
-					BCADashboardWindow = nil
-					popupSaldoParagraph = nil
-					popupStatusParagraph = nil
-					popupTripsParagraph = nil
-				end
-			end
-		})
-	end
-
-	-- ==============================================================================
-	-- UI MAIN TAB (BCA COURIER)
-	-- ==============================================================================
+	-- UI WINDUI TAB SETUP
 	local BCATab = Window:Tab({
 		Title = "BCA Courier",
 		Icon = "solar:box-minimalistic-bold"
 	})
 
 	local ControlsSection = BCATab:Section({ Title = "Auto Farm Controls" })
-	local DashboardSection = BCATab:Section({ Title = "Analitik & Saldo Pocket" })
+	local DashboardSection = BCATab:Section({ Title = "Floating Mini Dashboard" })
 	local SettingsSection = BCATab:Section({ Title = "Konfigurasi Kecepatan & Anti-Nerf" })
 	local ShortcutsSection = BCATab:Section({ Title = "Pintasan Teleport" })
 
-	-- Tombol Pembuka Window Dashboard Khusus
+	-- Tombol Open Floating Dashboard
 	DashboardSection:Button({
-		Title = "Buka Dashboard BCA Pocket",
-		Desc = "Buka jendela popup khusus untuk cek saldo live & trip counter.",
+		Title = "Toggle Floating Dashboard (BCA Pocket)",
+		Desc = "Buka/Tutup overlay mini transparan untuk monitor Saldo & Trips secara live.",
 		Callback = function()
-			OpenBCADashboard()
+			if not FloatingDash then
+				FloatingDash = UICreate.CreateFloatingDashboard("BCA Courier Live Monitor")
+				FloatingDash.UpdateSaldo(State.CurrentSaldoText)
+				FloatingDash.UpdateStatus(string.format("%s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total)))
+				FloatingDash.UpdateTrips(State.TotalTrips)
+			else
+				FloatingDash.Destroy()
+				FloatingDash = nil
+			end
 		end
 	})
 
@@ -752,14 +668,14 @@ function BCA.Init(Window, Utils, Context, WindUI)
 		Image = "info"
 	})
 
-	-- Live Status Updater
+	-- Live Status Sync
 	task.spawn(function()
 		while task.wait(0.3) do
 			if _G.MainCoreSession ~= Context.Session then break end
 			local statusText = string.format("Phase: %s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total))
 			pcall(function()
 				if statusParagraph then statusParagraph:SetDesc(statusText) end
-				if popupStatusParagraph then popupStatusParagraph:SetDesc(statusText) end
+				if FloatingDash then FloatingDash.UpdateStatus(statusText) end
 			end)
 		end
 	end)
