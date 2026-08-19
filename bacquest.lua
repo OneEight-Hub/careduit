@@ -573,7 +573,7 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		State.Carrying = (arg4 == true)
 		print(string.format("📦 Status Koper: %s/%s | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
 
-	-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR) ───
+		-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR) ───
 	elseif action == "LoadRound" and typeof(arg1) == "table" then
 		local greenSize = arg1.greenSize or arg1.greatSize or 0.18
 		local greenStart = arg1.greenStart or 0.5
@@ -600,7 +600,7 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 			print("✅ [Minigame Koper] LoadPress PERFECT terkirim!")
 		end)
 
-	-- ─── 2. AUTO PERFECT MINIGAME: SETOR ATM (SKILL CHECK CIRCLE) ───
+		-- ─── 2. AUTO PERFECT MINIGAME: SETOR ATM (SKILL CHECK CIRCLE) ───
 	elseif action == "SkillCheck" and typeof(arg1) == "table" then
 		local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
 		local targetAngle = arg1.zoneStart + (zoneWidth / 2)
@@ -797,10 +797,15 @@ local function RunDeliveryLoop()
 
 				if not State.AutoDelivering then break end
 
+				-- 3. Berjalan/Teleport Tepat ke Depan ATM dan Setor
 				if State.Carrying and State.TargetPos then
 					State.IsBusy = true
-					print("[+] Berjalan menuju mesin ATM...")
-					HumanWalkTo(State.TargetPos + Vector3.new(0, 0, 2), 3)
+					print("[+] Berpindah tepat ke depan mesin ATM...")
+
+					-- Pastikan karakter menapak tanah tepat di depan mesin ATM
+					UpdateCharacterFly(false)
+					SetCharacterAnchored(false)
+					SafeTeleportChar(CFrame.new(State.TargetPos + Vector3.new(0, 0, 1.5)))
 					task.wait(Config.ActionDelay)
 
 					print("[+] Memulai pengisian ATM...")
