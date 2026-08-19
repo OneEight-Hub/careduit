@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 -- ==============================================================================
 -- 1. PENGHAPUSAN LANGSUNG (DESTROY) GEDUNG BCA SAAT AWAL EKSEKUSI
@@ -44,13 +45,18 @@ DestroyBuildingInstances()
 -- ==============================================================================
 -- 2. CLEANUP HOOKS & UI LAMA
 -- ==============================================================================
+if not _G.BCACourierHooks then _G.BCACourierHooks = {} end
+for _, conn in ipairs(_G.BCACourierHooks) do
+	pcall(function() conn:Disconnect() end)
+end
+_G.BCACourierHooks = {}
+
 if _G.KoperLoaderHook then _G.KoperLoaderHook:Disconnect() _G.KoperLoaderHook = nil end
 if _G.DeliveryRunnerHook then _G.DeliveryRunnerHook:Disconnect() _G.DeliveryRunnerHook = nil end
 if _G.MainCoreHook then _G.MainCoreHook:Disconnect() _G.MainCoreHook = nil end
 if _G.MainCoreDialogHook then _G.MainCoreDialogHook:Disconnect() _G.MainCoreDialogHook = nil end
 if _G.MainCoreJobHook then _G.MainCoreJobHook:Disconnect() _G.MainCoreJobHook = nil end
 
--- Guard: reset flag saldo RC agar re-run tidak skip registrasi
 if _G.MainCoreSaldoRegistered then _G.MainCoreSaldoRegistered = false end
 
 local PlayerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
@@ -67,12 +73,13 @@ local JobRemote = ReplicatedStorage:WaitForChild("NetworkContainer"):WaitForChil
 
 local ExpectedCarName = LocalPlayer.Name .. "sCar"
 
--- CONFIGURABLE VALUES
+-- CONFIGURABLE VALUES (DIOPTIMASI UNTUK PERJALANAN NATURAL)
 local Config = {
-	TweenSpeed = 140,
-	ActionDelay = 0.3,
-	LoopWait = 0.5,
-	RestartDelay = 2.5
+	TweenSpeed = 65,        -- Kecepatan wajar CDID (~60-70 km/jam)
+	MinTravelDuration = 22, -- Batas minimal detik perjalanan agar bonus jarak penuh keluar
+	ActionDelay = 0.5,
+	LoopWait = 0.6,
+	RestartDelay = 3.0
 }
 
 -- State
@@ -95,7 +102,7 @@ local State = {
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
 local Window = WindUI:CreateWindow({
-	Title = "BCA Courier Auto-Farm",
+	Title = "BCA Courier Auto-Farm (Humanized)",
 	Author = "by ASRock",
 	Folder = "bca_courier",
 	Icon = "solar:folder-2-bold-duotone",
@@ -119,42 +126,51 @@ local HomeSection = MainTab:Section({
 })
 
 local SettingsSection = MainTab:Section({
-	Title = "Konfigurasi Alur Kecepatan & Jeda"
+	Title = "Konfigurasi Kecepatan & Anti-Nerf"
 })
 
+local TeleportTab = Window:Tab({
+	Title = "Pintasan Teleport",
+	Icon = "solar:map-point-bold-duotone"
+})
+
+local TeleportSection = TeleportTab:Section({
+	Title = "Shortcuts Teleport Karakter"
+})
+
+
+TeleportSection:Button({
+	Title = "Teleport ke NPC Start (Lobby)",
+	Desc = "Teleport instan ke dekat NPC pendaftaran kurir.",
+	Callback = function()
+		local StartNpc = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("NPC_START_JOB")
+		SafeTeleportChar(StartNpc:GetPivot())
+		print("📍 Teleportasi ke NPC Start selesai.")
+	end
+})
+
+TeleportSection:Button({
+	Title = "Teleport ke Spawner Mobil",
+	Desc = "Teleport instan ke petugas parkir kendaraan bank.",
+	Callback = function()
+		local CarSpawner = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("CAR_SPAWNER_NPC")
+		SafeTeleportChar(CarSpawner:GetPivot())
+		print("📍 Teleportasi ke Spawner Mobil selesai.")
+	end
+})
+
+TeleportSection:Button({
+	Title = "Teleport ke Rak Koper",
+	Desc = "Teleport instan ke area tumpukan koper BCA.",
+	Callback = function()
+		local KoperSpawn = Workspace:WaitForChild("MY_BCA_COLLAB"):WaitForChild("Job"):WaitForChild("BankCourier"):WaitForChild("KoperSpawn")
+		SafeTeleportChar(KoperSpawn:GetPivot())
+		print("📍 Teleportasi ke Rak Koper selesai.")
+	end
+})
 local autoFarmToggle
 local statusParagraph
 local saldoParagraph
-
--- Helper Saldo
-local function GetSaldoInstance()
-	local container = PlayerGui:FindFirstChild("Container")
-	if container then
-		local holder = container:FindFirstChild("Holder")
-		local appContainer = holder and holder:FindFirstChild("AppCountainer")
-		local myBca = appContainer and appContainer:FindFirstChild("MyBca")
-		local home = myBca and myBca:FindFirstChild("Home")
-		local main = home and home:FindFirstChild("Main")
-		local frame = main and main:FindFirstChild("Frame")
-		local pocket = frame and frame:FindFirstChild("3b_POCKETRUPIAH")
-		local balanceFrame = pocket and pocket:FindFirstChild("BalanceFrame")
-		local scroll = balanceFrame and balanceFrame:FindFirstChild("ScrolingFrame")
-		local eventPocket = scroll and scroll:FindFirstChild("EventPocket")
-		local saldo = eventPocket and eventPocket:FindFirstChild("Saldo")
-		if saldo then
-			return saldo
-		end
-	end
-
-	for _, child in ipairs(PlayerGui:GetDescendants()) do
-		if child:IsA("TextLabel") and child.Name == "Saldo" then
-			if child:FindFirstAncestor("3b_POCKETRUPIAH") then
-				return child
-			end
-		end
-	end
-	return nil
-end
 
 -- Helper Reset Kamera
 local function ResetPlayerCamera()
@@ -168,17 +184,108 @@ local function ResetPlayerCamera()
 	end
 end
 
--- Teleport Karakter Langsung ke Depan NPC
+-- Helper: Berjalan secara alami ke target
+local function HumanWalkTo(targetPos, maxWait)
+	maxWait = maxWait or 4
+	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+	local hum = char:WaitForChild("Humanoid", 5)
+	local hrp = char:WaitForChild("HumanoidRootPart", 5)
+	if not hum or not hrp then return end
+
+	local dist = (hrp.Position - targetPos).Magnitude
+	if dist > 35 then
+		-- Jika terlalu jauh (misal awal rute), teleport dengan offset wajar
+		hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 1.2, 0))
+		task.wait(Config.ActionDelay)
+	else
+		-- Jika dalam radius dekat, gunakan MoveTo agar animasi kaki berjalan normal
+		hum:MoveTo(targetPos)
+		local startTime = os.clock()
+		while (hrp.Position - targetPos).Magnitude > 3 and (os.clock() - startTime < maxWait) do
+			task.wait(0.1)
+		end
+	end
+end
+
+-- Helper: Teleport Halus Karakter
+local FlyConn
+local function UpdateCharacterFly(active)
+	local char = LocalPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChild("Humanoid")
+	if not hrp or not hum then return end
+
+	local oldBv = hrp:FindFirstChild("MainCoreFlyVelocity")
+	local oldBg = hrp:FindFirstChild("MainCoreFlyGyro")
+	if oldBv then oldBv:Destroy() end
+	if oldBg then oldBg:Destroy() end
+
+	if active then
+		hum.PlatformStand = true
+
+		local bv = Instance.new("BodyVelocity")
+		bv.Name = "MainCoreFlyVelocity"
+		bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		bv.Velocity = Vector3.new(0, 0, 0)
+		bv.Parent = hrp
+
+		local bg = Instance.new("BodyGyro")
+		bg.Name = "MainCoreFlyGyro"
+		bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+		bg.CFrame = hrp.CFrame
+		bg.Parent = hrp
+
+		print("✈️ [Fly Mode] Karakter diaktifkan melayang.")
+	else
+		hum.PlatformStand = false
+		print("✈️ [Fly Mode] Karakter diturunkan.")
+	end
+end
+
+local function StartPersistentFly()
+	if FlyConn then pcall(function() FlyConn:Disconnect() end) end
+	local char = LocalPlayer.Character
+	if char then
+		UpdateCharacterFly(true)
+	end
+	FlyConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
+		task.wait(1.0)
+		if State.AutoFarmActive and not State.IsBusy then
+			local newHum = newChar:WaitForChild("Humanoid", 5)
+			if newHum and not newHum.Sit then
+				UpdateCharacterFly(true)
+			end
+		end
+	end)
+end
+
+local function StopPersistentFly()
+	if FlyConn then pcall(function() FlyConn:Disconnect() end) FlyConn = nil end
+	UpdateCharacterFly(false)
+end
+
+local function SetCharacterAnchored(state)
+	pcall(function()
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			hrp.Anchored = state
+		end
+	end)
+end
+
 local function SafeTeleportChar(targetCFrame)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	if hrp then
-		hrp.CFrame = targetCFrame + Vector3.new(0, 1.2, 0)
+		hrp.Anchored = false -- Unanchor agar posisi baru ter-replikasi ke server
+		hrp.CFrame = targetCFrame + Vector3.new(0, 1.5, 0)
+		task.wait(0.2) -- Jeda pendek agar server mencatat perpindahan posisi
+		SetCharacterAnchored(true) -- Kunci posisi kembali untuk interaksi
 		task.wait(Config.ActionDelay)
 	end
 end
 
--- Proximity Prompt Trigger
 local function TriggerPrompt(prompt, targetPart, isTrunk)
 	if not prompt then return false end
 
@@ -191,12 +298,10 @@ local function TriggerPrompt(prompt, targetPart, isTrunk)
 	if not hrp then return false end
 
 	if targetPart then
-		if isTrunk then
-			hrp.CFrame = CFrame.new(targetPart.Position + (targetPart.CFrame.LookVector * -1.8), targetPart.Position)
-		else
-			hrp.CFrame = targetPart.CFrame * CFrame.new(0, 0, 1.5)
-		end
-		task.wait(0.2)
+		hrp.Anchored = false -- Unanchor agar perpindahan posisi ter-replikasi
+		hrp.CFrame = targetPart:GetPivot()
+		task.wait(0.25) -- Jeda kritis agar server menyetujui validasi jarak ProximityPrompt
+		SetCharacterAnchored(true) -- Kunci posisi saat proses menahan tombol
 	end
 
 	if fireproximityprompt then
@@ -206,26 +311,28 @@ local function TriggerPrompt(prompt, targetPart, isTrunk)
 	prompt:InputHoldBegin()
 	task.wait(prompt.HoldDuration + 0.1)
 	prompt:InputHoldEnd()
+	SetCharacterAnchored(false) -- Bebaskan kembali setelah selesai
 	return true
 end
 
--- Helper Kendaraan
+-- Helper Temukan Mobil
 local function GetPlayerCar()
 	local vehicles = Workspace:FindFirstChild("Vehicles")
 	if not vehicles then return nil end
-	return vehicles:FindFirstChild(ExpectedCarName) or vehicles:FindFirstChild(LocalPlayer.Name .. "'sCar")
+	for _, v in ipairs(vehicles:GetChildren()) do
+		if v.Name:find(LocalPlayer.Name, 1, true) then
+			return v
+		end
+	end
+	return nil
 end
 
 local function GetMuatPrompt(bagasiPoint)
 	if not bagasiPoint then return nil end
 	local prompt = bagasiPoint:FindFirstChild("MuatPrompt")
-	if prompt and prompt:IsA("ProximityPrompt") then
-		return prompt
-	end
+	if prompt and prompt:IsA("ProximityPrompt") then return prompt end
 	for _, p in ipairs(bagasiPoint:GetChildren()) do
-		if p:IsA("ProximityPrompt") and p.Name ~= "AmbilPrompt" then
-			return p
-		end
+		if p:IsA("ProximityPrompt") and p.Name ~= "AmbilPrompt" then return p end
 	end
 	return nil
 end
@@ -233,18 +340,17 @@ end
 local function GetAmbilPrompt(bagasiPoint)
 	if not bagasiPoint then return nil end
 	local prompt = bagasiPoint:FindFirstChild("AmbilPrompt")
-	if prompt and prompt:IsA("ProximityPrompt") then
-		return prompt
-	end
+	if prompt and prompt:IsA("ProximityPrompt") then return prompt end
 	for _, p in ipairs(bagasiPoint:GetChildren()) do
-		if p:IsA("ProximityPrompt") and p.Name ~= "MuatPrompt" then
-			return p
-		end
+		if p:IsA("ProximityPrompt") and p.Name ~= "MuatPrompt" then return p end
 	end
 	return nil
 end
 
+-- Helper Naik Driver Seat
 local function EnterDriverSeat(car)
+	UpdateCharacterFly(false) -- Turun agar bisa masuk kursi kemudi
+	SetCharacterAnchored(false)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
 	local hum = char:WaitForChild("Humanoid", 5)
@@ -262,6 +368,7 @@ local function EnterDriverSeat(car)
 
 	if hum.SeatPart == seat or hum.Sit then return true end
 
+	HumanWalkTo(seat.Position + Vector3.new(0, 1.2, 1.5), 2)
 	hrp.CFrame = seat.CFrame * CFrame.new(0, 1.2, 1.5)
 	task.wait(Config.ActionDelay)
 
@@ -279,7 +386,7 @@ local function EnterDriverSeat(car)
 			seat:Sit(hum)
 		end
 		drivePrompt:InputHoldBegin()
-		task.wait(drivePrompt.HoldDuration + Config.ActionDelay / 2)
+		task.wait(drivePrompt.HoldDuration + 0.1)
 		drivePrompt:InputHoldEnd()
 	else
 		seat:Sit(hum)
@@ -294,6 +401,7 @@ local function EnterDriverSeat(car)
 end
 
 local function ExitDriverSeat(car)
+	SetCharacterAnchored(false)
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChild("Humanoid")
 	if hum and hum.Sit then
@@ -305,56 +413,80 @@ local function ExitDriverSeat(car)
 		local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
 		if primary then
 			primary.Anchored = true
-			print("[Physics] Kendaraan berhasil di-anchor.")
 		end
 	end
-end
 
-local function TweenCarTo(car, targetPos, speed)
-	speed = speed or Config.TweenSpeed
-	local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
-	if not primary then return end
-
-	local startCF = car:GetPivot()
-	local targetCF = CFrame.new(targetPos + Vector3.new(0, 4, 0))
-	local dist = (startCF.Position - targetCF.Position).Magnitude
-	local duration = math.max(0.5, dist / speed)
-
-	local wasAnchored = primary.Anchored
-	primary.Anchored = true
-
-	local cfVal = Instance.new("CFrameValue")
-	cfVal.Value = startCF
-
-	local conn = cfVal.Changed:Connect(function(newCF)
-		car:PivotTo(newCF)
-	end)
-
-	local tween = TweenService:Create(
-		cfVal, 
-		TweenInfo.new(duration, Enum.EasingStyle.Linear), 
-		{Value = targetCF}
-	)
-
-	print(string.format("🚗 Tweening mobil menuju lokasi (Jarak: %.0f stud, Kecepatan: %.0f, Durasi: %.1f dtk)...", dist, speed, duration))
-	tween:Play()
-	tween.Completed:Wait()
-
-	conn:Disconnect()
-	cfVal:Destroy()
-	primary.Anchored = wasAnchored
-
-	for _, p in ipairs(car:GetDescendants()) do
-		if p:IsA("BasePart") then
-			p.AssemblyLinearVelocity = Vector3.zero
-			p.AssemblyAngularVelocity = Vector3.zero
-		end
+	if State.AutoFarmActive then
+		UpdateCharacterFly(true) -- Terbang kembali setelah keluar mobil
 	end
-	task.wait(Config.ActionDelay)
 end
 
 -- ==============================================================================
--- 3. HOOKS EVENT NETWORK & DIALOG SINKRONISASI
+-- SIMULASI MENGEMUDI HUMANIZED (ANTI-NERF SALARY)
+-- ==============================================================================
+local function DriveCarNaturallyTo(car, targetPos, speed)
+	speed = speed or Config.TweenSpeed
+	local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
+	local seat = car:FindFirstChildWhichIsA("VehicleSeat", true)
+	if not primary then return end
+
+	local startCF = car:GetPivot()
+	-- Offset Y 1.5 stud agar suspensi mobil tetap menyentuh aspal secara natural
+	local targetCF = CFrame.new(targetPos + Vector3.new(0, 4.0, 0), targetPos + Vector3.new(0, 4.0, 10))
+	local dist = (startCF.Position - targetCF.Position).Magnitude
+
+	-- Hitung durasi realistis
+	local calculatedDuration = dist / speed
+	local duration = math.max(Config.MinTravelDuration, calculatedDuration)
+
+	primary.Anchored = false
+
+	local startTime = os.clock()
+	local conn
+
+	print(string.format("🚗 [Humanized Drive] Menyetir ke ATM (Jarak: %.0f stud | Target Durasi: %.1f dtk | Speed: %.0f studs/s)...", dist, duration, speed))
+
+	-- Loop pergerakan fisika aktif (Odometer & Engine Throttle aktif di server)
+	while (os.clock() - startTime) < duration and State.AutoDelivering do
+		local alpha = math.clamp((os.clock() - startTime) / duration, 0, 1)
+		local currentCF = startCF:Lerp(targetCF, alpha)
+
+		-- Simulasi gas mobil aktif
+		if seat then
+			pcall(function()
+				seat.ThrottleFloat = 1
+				seat.Throttle = 1
+			end)
+		end
+
+		car:PivotTo(currentCF)
+
+		-- Memberikan kecepatan linier agar speedometer dan server distance-check terbaca
+		primary.AssemblyLinearVelocity = currentCF.LookVector * speed
+		primary.AssemblyAngularVelocity = Vector3.zero
+
+		RunService.Heartbeat:Wait()
+	end
+
+	-- Netralkan kembali saat sampai
+	if seat then
+		pcall(function()
+			seat.ThrottleFloat = 0
+			seat.Throttle = 0
+		end)
+	end
+
+	primary.Anchored = true
+	primary.AssemblyLinearVelocity = Vector3.zero
+	primary.AssemblyAngularVelocity = Vector3.zero
+	task.wait(Config.ActionDelay)
+	if State.AutoFarmActive then
+		UpdateCharacterFly(true) -- Terbang kembali setelah keluar mobil
+	end
+end
+
+-- ==============================================================================
+-- 3. HOOKS EVENT NETWORK & PERFECT AUTO-WIN MINIGAMES
 -- ==============================================================================
 _G.MainCoreDialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, data)
 	if action == "Start" then
@@ -362,18 +494,14 @@ _G.MainCoreDialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, da
 		task.spawn(function()
 			task.wait(0.5)
 
-			-- 1. Beritahu Server bahwa dialog telah disetujui/diselesaikan
 			NpcDialogEvent:FireServer("Finish", nil)
 
-			-- 2. Tembak event "Abort" ke OnClientEvent lokal agar LocalScript game mereset kamera & tabel v_u_28
 			if firesignal then
 				pcall(firesignal, NpcDialogEvent.OnClientEvent, "Abort")
 			end
 
-			-- 3. Reset kamera lokal (Fail-safe)
 			ResetPlayerCamera()
 
-			-- 4. Paksa nyalakan semua ProximityPrompt NPC
 			local Mf = Workspace:FindFirstChild("MY_BCA_COLLAB")
 			if Mf then
 				for _, p in ipairs(Mf:GetDescendants()) do
@@ -382,30 +510,33 @@ _G.MainCoreDialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, da
 					end
 				end
 			end
-			print("✅ [Dialog] Dialog selesai, kamera direset, dan ProximityPrompt aktif kembali!")
+			print("✅ [Dialog] Dialog selesai & Kamera kembali normal.")
 		end)
 	end
 end)
+table.insert(_G.BCACourierHooks, _G.MainCoreDialogHook)
 
 _G.MainCoreJobHook = JobRemote.OnClientEvent:Connect(function(action, arg1)
 	if action == "SetJob" then
 		if arg1 == "BankCourier" then
 			State.Phase = "Loading"
-			print("💼 [Job State] Karakter sekarang adalah BankCourier (Job Dimulai).")
+			print("💼 [Job State] BankCourier Dimulai.")
 		elseif arg1 == "Unemployee" then
 			State.Phase = "Unemployee"
 			State.Loaded = 0
 			State.Total = 0
-			print("🛑 [Job State] Karakter sekarang adalah Unemployee (Job Berakhir).")
+			print("🛑 [Job State] Kembali ke Unemployee.")
 		end
 	end
+
+	table.insert(_G.BCACourierHooks, _G.MainCoreJobHook)
 end)
 
 _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, arg2, arg3, arg4)
 	if action == "Start" then
 		State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
 		State.Phase = "Loading"
-		print("📋 Total Koper Dibutuhkan:", State.Total)
+		print("📋 Total Koper:", State.Total)
 
 	elseif action == "Phase" then
 		State.Phase = arg1
@@ -416,27 +547,23 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		elseif arg2 and arg2:IsA("BasePart") then
 			State.TargetPos = arg2.Position
 		end
-		print("🔄 Phase Berganti:", State.Phase, "| Target Pos:", tostring(State.TargetPos))
+		print("🔄 Phase:", State.Phase, "| Target ATM:", tostring(State.TargetPos))
 
 	elseif action == "Koper" then
 		State.Loaded = arg1
 		State.Carrying = (arg4 == true)
-		print(string.format("📦 Status Koper: %s/%s di mobil | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
+		print(string.format("📦 Status Koper: %s/%s | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
 
-
+		-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR) ───
 	elseif action == "LoadRound" and typeof(arg1) == "table" then
-		-- Auto-solve Green Bar minigame: presisi penuh, skip 1 period saja
+		-- Auto-solve Green Bar minigame: presisi penuh, skip 1 period saja (Cara Lama)
 		local greenSize = arg1.greenSize or arg1.greatSize or 0.15
 		local greenStart = arg1.greenStart or 0.5
 		local period = math.max(arg1.period or 1, 0.1)
 
-		-- Sample ping 3x, ambil nilai terkecil (paling optimis / worst-case untuk timing awal)
-		local ping = math.huge
-		for _ = 1, 3 do
-			pcall(function() local p = LocalPlayer:GetNetworkPing(); if p < ping then ping = p end end)
-			task.wait(0)
-		end
-		if ping == math.huge or ping ~= ping then ping = 0 end
+		-- Dapatkan ping secara instan tanpa yielding (mencegah frame-rate lag 50ms)
+		local ping = 0
+		pcall(function() ping = LocalPlayer:GetNetworkPing() or 0 end)
 
 		-- Target 40% dalam area hijau (lebih safe dari edge kanan)
 		local centerGreen = greenStart + (greenSize * 0.4)
@@ -461,30 +588,38 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 			Network:FireServer("BankCourier", "LoadPress")
 			print("[LoadRound] LoadPress dikirim!")
 		end)
+
 	elseif action == "SkillCheck" and typeof(arg1) == "table" then
+		-- Auto-solve ATM circle skillcheck: 100% Always Perfect dengan RTT ping compensation penuh
 		local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
 		local targetAngle = arg1.zoneStart + (zoneWidth / 2)
 		local speed = arg1.speed or 1
 		local warnLead = arg1.warnLead or 0
 
-		local ping = LocalPlayer:GetNetworkPing()
+		local ping = 0
+		pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+
 		local timeToHit = warnLead + (targetAngle / speed)
-		local delayTime = timeToHit - ping
+
+		-- Kompensasi ping RTT penuh + buffer pemrosesan
+		local delayTime = timeToHit - ping - 0.01
 
 		local rotations = 0
-		while delayTime < 0.05 do
+		while delayTime < 0.03 do
 			delayTime = delayTime + (360 / speed)
 			rotations = rotations + 1
 		end
 
 		local angleToSend = targetAngle + (rotations * 360)
 
-		task.delay(delayTime, function()
-			if _G.MainCoreSession ~= session then return end
-			Network:FireServer("BankCourier", "SkillPress", angleToSend)
-			print("✅ SkillPress terkirim!")
-		end)
+		print(string.format("🎯 [Minigame ATM] Great Zone Angle: %.1f | Ping: %.0fms | Mengirim SkillPress dalam: %.3fs", angleToSend, ping * 1000, delayTime))
 
+		local currentSession = session
+		task.delay(delayTime, function()
+			if _G.MainCoreSession ~= currentSession then return end
+			Network:FireServer("BankCourier", "SkillPress", angleToSend)
+			print("✅ [Minigame ATM] SkillPress PERFECT terkirim!")
+		end)
 	elseif action == "Complete" or action == "Returning" then
 		State.Phase = "Returning"
 		print("🏁 Semua ATM telah berhasil diisi!")
@@ -493,11 +628,13 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		State.Phase = "Unemployee"
 		State.Loaded = 0
 		State.Total = 0
-		print("🛑 Job Berhenti / Gaji Diterima (Kembali ke Status Unemployee).")
+		print("🛑 Job Berhenti / Gaji Diterima.")
 	end
 end)
 
--- ==============================================================================
+-- ==============
+table.insert(_G.BCACourierHooks, _G.MainCoreHook)
+-- ================================================================
 -- 4. AUTOFARM SEQUENCES
 -- ==============================================================================
 local function Action_StartJob()
@@ -505,23 +642,19 @@ local function Action_StartJob()
 	local StartNpc = Mf:WaitForChild("NPC_START_JOB")
 
 	if State.Phase == "Loading" or State.Phase == "Delivering" then
-		print("ℹ️ Job sudah aktif di memori. Melompati pendaftaran.")
 		return
 	end
 
-	print("[UI] Teleport ke NPC Start...")
+	print("[UI] Berjalan ke NPC Start...")
 	SafeTeleportChar(StartNpc:GetPivot())
 	task.wait(1)
 
 	local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if prompt then
-		prompt.Enabled = true
-	end
+	if prompt then prompt.Enabled = true end
 
-	print("[UI] Mengaktifkan ProximityPrompt NPC Start...")
+	print("[UI] Mengambil Pekerjaan di NPC Start...")
 	TriggerPrompt(prompt, StartNpc.PrimaryPart or StartNpc:FindFirstChildWhichIsA("BasePart"))
 
-	-- Tunggu respons pergantian job dari server
 	local dialogWait = os.clock()
 	while State.Phase == "Unemployee" and (os.clock() - dialogWait < 4) do
 		task.wait(0.1)
@@ -532,16 +665,14 @@ end
 local function Action_SpawnVehicle()
 	local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
 	local CarSpawner = Mf:WaitForChild("CAR_SPAWNER_NPC")
-	print("[UI] Teleport ke Spawner Mobil...")
+	print("[UI] Berjalan ke Spawner Mobil...")
 	SafeTeleportChar(CarSpawner:GetPivot())
 	task.wait(1)
 
 	local spawnPrompt = CarSpawner:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if spawnPrompt then
-		spawnPrompt.Enabled = true
-	end
+	if spawnPrompt then spawnPrompt.Enabled = true end
 
-	print("[UI] Mengaktifkan ProximityPrompt Spawner Mobil...")
+	print("[UI] Mengeluarkan Kendaraan...")
 	TriggerPrompt(spawnPrompt, CarSpawner.PrimaryPart or CarSpawner:FindFirstChildWhichIsA("BasePart"))
 
 	task.wait(1.5)
@@ -571,7 +702,7 @@ local function RunLoadingLoop()
 
 			if not State.Carrying and not State.IsBusy then
 				State.IsBusy = true
-				print("[+] Mengambil koper baru dari rak...")
+				print("[+] Berjalan mengambil koper...")
 				SafeTeleportChar(KoperSpawn:GetPivot())
 				TriggerPrompt(koperPrompt, KoperSpawn.PrimaryPart or KoperSpawn:FindFirstChildWhichIsA("BasePart"))
 
@@ -583,7 +714,7 @@ local function RunLoadingLoop()
 			elseif State.Carrying and not State.IsBusy then
 				if bagasiPoint and muatPrompt then
 					State.IsBusy = true
-					print("[+] Memuat koper ke bagasi mobil...")
+					print("[+] Berjalan memuat koper ke bagasi...")
 					SafeTeleportChar(bagasiPoint.CFrame)
 					TriggerPrompt(muatPrompt, bagasiPoint, true)
 
@@ -594,14 +725,12 @@ local function RunLoadingLoop()
 					State.IsBusy = false
 					task.wait(Config.ActionDelay)
 				else
-					warn("⚠️ Menunggu MuatPrompt di BagasiPoint aktif...")
 					task.wait(Config.LoopWait)
 				end
 			end
 			task.wait(Config.LoopWait)
 		end
 		State.LoadingActive = false
-		print("[UI] Auto Load Koper Dihentikan")
 	end)
 end
 
@@ -628,29 +757,30 @@ local function RunDeliveryLoop()
 				local hrp = char and char:FindFirstChild("HumanoidRootPart")
 				local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
+				-- 1. Naik mobil dan kendarai secara natural (Anti-Nerf)
 				if not State.Carrying and State.TargetPos and distToAtm > 35 then
 					State.IsBusy = true
-					print("[+] Masuk ke DriverSeat...")
+					print("[+] Naik ke Driver Seat...")
 					EnterDriverSeat(car)
 					task.wait(Config.ActionDelay)
 
 					if not State.AutoDelivering then State.IsBusy = false break end
 
-					print("[+] Tween mobil menuju lokasi ATM...")
-					TweenCarTo(car, State.TargetPos + Vector3.new(0, 0, 10), Config.TweenSpeed)
+					-- Menyetir dengan kalkulasi jarak dan Odometer aktif
+					DriveCarNaturallyTo(car, State.TargetPos + Vector3.new(0, 0, 8), Config.TweenSpeed)
 
-					print("[+] Keluar dari DriverSeat...")
+					print("[+] Turun dari Driver Seat...")
 					ExitDriverSeat(car)
 					State.IsBusy = false
 				end
 
 				if not State.AutoDelivering then break end
 
+				-- 2. Ambil koper dari bagasi
 				if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 40 then
 					State.IsBusy = true
-					print("[+] Mengambil koper dari bagasi...")
-					SafeTeleportChar(bagasiPoint.CFrame)
-					TriggerPrompt(ambilPrompt, bagasiPoint)
+					print("[+] Mengambil koper dari bagasi mobil...")
+					TriggerPrompt(ambilPrompt, bagasiPoint, true)
 
 					local waitCarry = os.clock()
 					while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < Config.ActionDelay * 10) do
@@ -661,16 +791,18 @@ local function RunDeliveryLoop()
 
 				if not State.AutoDelivering then break end
 
+				-- 3. Berjalan ke ATM dan setor
 				if State.Carrying and State.TargetPos then
 					State.IsBusy = true
-					print("[+] Berteleportasi ke ATM & menyetor uang...")
-					SafeTeleportChar(CFrame.new(State.TargetPos))
+					print("[+] Berjalan menuju mesin ATM...")
+					HumanWalkTo(State.TargetPos + Vector3.new(0, 0, 2), 3)
 					task.wait(Config.ActionDelay)
 
+					print("[+] Memulai pengisian ATM...")
 					Network:FireServer("BankCourier", "FillStart")
 
 					local waitFill = os.clock()
-					while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 23) do
+					while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 25) do
 						task.wait(Config.LoopWait / 2)
 					end
 					State.IsBusy = false
@@ -680,16 +812,16 @@ local function RunDeliveryLoop()
 			task.wait(Config.LoopWait)
 		end
 		State.DeliveryActive = false
-		print("[UI] Auto Delivery ATM Dihentikan")
 	end)
 end
 
 local function Action_ResetAll()
+	StopPersistentFly()
 	if not State.AutoFarmActive and _G.MainCoreSession == session then
 		return
 	end
 
-	print("[UI] Mereset dan menonaktifkan semua proses...")
+	print("[UI] Mereset semua proses...")
 
 	session = os.clock()
 	_G.MainCoreSession = session
@@ -730,7 +862,7 @@ local function Action_ResetAll()
 		end
 	end)
 
-	print("✅ Semua proses berhasil dihentikan & di-reset.")
+	print("✅ Semua proses berhasil di-reset.")
 end
 
 -- ==============================================================================
@@ -738,19 +870,20 @@ end
 -- ==============================================================================
 autoFarmToggle = HomeSection:Toggle({
 	Title = "Endless Auto Farm",
-	Desc = "Mulai/Hentikan siklus farm otomatis pekerjaan Bank Courier.",
+	Desc = "Mulai/Hentikan siklus kurir dengan simulasi perjalanan natural.",
 	Value = false,
 	Callback = function(active)
 		if State.AutoFarmActive == active then return end
 
 		State.AutoFarmActive = active
 		if active then
+			StartPersistentFly()
 			task.spawn(function()
-				print("[AutoFarm] Memulai Loop Siklus Pekerjaan...")
+				print("[AutoFarm] Memulai Siklus Pengantaran...")
 				while State.AutoFarmActive do
 					if _G.MainCoreSession ~= session then break end
 
-					-- 1. Mulai Pekerjaan
+					-- 1. Ambil Job
 					Action_StartJob()
 
 					local startWait = os.clock()
@@ -761,7 +894,7 @@ autoFarmToggle = HomeSection:Toggle({
 					if not State.AutoFarmActive or _G.MainCoreSession ~= session then break end
 
 					if State.Phase == "Unemployee" then
-						warn("⚠️ Pekerjaan gagal dimulai, mengulang pendaftaran...")
+						warn("⚠️ Gagal mengambil job, mengulang...")
 						task.wait(Config.RestartDelay)
 						continue
 					end
@@ -780,18 +913,12 @@ autoFarmToggle = HomeSection:Toggle({
 					if not State.AutoFarmActive or _G.MainCoreSession ~= session then break end
 
 					if not car then
-						warn("⚠️ Mobil tidak berhasil di-spawn, mengulang pendaftaran dari awal...")
+						warn("⚠️ Mobil tidak muncul, mengulang...")
 						task.wait(Config.RestartDelay)
 						continue
 					end
 
-					local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
-					if primary then
-						primary.Anchored = true
-						print("[Physics] Mobil baru di-spawn, langsung di-anchor.")
-					end
-
-					-- 3. Muat Koper ke Bagasi Mobil
+					-- 3. Muat Koper (Auto-Win Minigame)
 					State.AutoLoading = true
 					RunLoadingLoop()
 
@@ -801,7 +928,7 @@ autoFarmToggle = HomeSection:Toggle({
 					end
 					if not State.AutoFarmActive or _G.MainCoreSession ~= session then break end
 
-					-- 4. Kirim Uang ke ATM
+					-- 4. Antar Koper ke ATM (Humanized Driving + Auto-Win Minigame)
 					State.AutoDelivering = true
 					RunDeliveryLoop()
 
@@ -812,7 +939,7 @@ autoFarmToggle = HomeSection:Toggle({
 					if not State.AutoFarmActive or _G.MainCoreSession ~= session then break end
 
 					-- 5. Kembalikan Mobil ke BCA
-					print("[AutoFarm] Mengembalikan mobil ke kantor BCA...")
+					print("[AutoFarm] Mengemudikan mobil kembali ke BCA...")
 					local returnCar = GetPlayerCar()
 					if returnCar then
 						EnterDriverSeat(returnCar)
@@ -821,27 +948,24 @@ autoFarmToggle = HomeSection:Toggle({
 
 						local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
 						local CarSpawner = Mf:WaitForChild("CAR_SPAWNER_NPC")
-						TweenCarTo(returnCar, CarSpawner:GetPivot().Position, Config.TweenSpeed)
+						DriveCarNaturallyTo(returnCar, CarSpawner:GetPivot().Position, Config.TweenSpeed)
 						ExitDriverSeat(returnCar)
 					end
 					if not State.AutoFarmActive or _G.MainCoreSession ~= session then break end
 
-					-- 6. Teleport ke NPC Start untuk klaim gaji & akhiri job
-					print("[AutoFarm] Klaim gaji di NPC Start...")
+					-- 6. Klaim Gaji di NPC Start
+					print("[AutoFarm] Mengambil upah penuh di NPC Start...")
 					local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
 					local StartNpc = Mf:WaitForChild("NPC_START_JOB")
 					SafeTeleportChar(StartNpc:GetPivot())
 					task.wait(1)
 
 					local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
-					if prompt then
-						prompt.Enabled = true
-					end
+					if prompt then prompt.Enabled = true end
 
-					print("[AutoFarm] Mengaktifkan ProximityPrompt NPC Start untuk klaim gaji...")
 					TriggerPrompt(prompt, StartNpc.PrimaryPart or StartNpc:FindFirstChildWhichIsA("BasePart"))
 
-					print("[AutoFarm] Menunggu pergantian status job ke Unemployee...")
+					print("[AutoFarm] Menunggu pencairan gaji selesai...")
 					local endWait = os.clock()
 					while State.Phase ~= "Unemployee" and (os.clock() - endWait < 10) do
 						if _G.MainCoreSession ~= session or not State.AutoFarmActive then return end
@@ -872,53 +996,82 @@ saldoParagraph = HomeSection:Paragraph({
 	Image = "wallet"
 })
 
-SettingsSection:Slider({
-	Title = "Kecepatan Mobil (Tween Speed)",
-	Desc = "Mengatur kecepatan gerak otomatis mobil (studs/detik).",
-	Value = { Min = 50, Max = 350, Default = 140 },
+SettingsSection:Input({
+	Title = "Kecepatan Mengemudi (Speed)",
+	Desc = "Masukkan kecepatan wajar CDID (studs/detik).",
+	Value = tostring(Config.TweenSpeed),
+	Placeholder = "Contoh: 65",
 	Callback = function(val)
-		Config.TweenSpeed = val
-		print("⚙️ [Config] Kecepatan Mobil diubah menjadi:", val, "studs/detik")
+		local num = tonumber(val)
+		if num then
+			Config.TweenSpeed = num
+			print("⚙️ [Config] Kecepatan diubah:", num, "studs/detik")
+		else
+			warn("⚠️ Input kecepatan harus berupa angka!")
+		end
 	end
 })
 
 SettingsSection:Slider({
-	Title = "Jeda Aksi & Teleport (Action Delay)",
-	Desc = "Jeda tunggu setelah teleportasi atau interaksi tombol (detik).",
-	Value = { Min = 1, Max = 20, Default = 3 },
+	Title = "Durasi Minimum Perjalanan",
+	Desc = "Batas minimal detik perjalanan per rute (Anti-Nerf).",
+	Value = { Min = 10, Max = 45, Default = 22 },
+	Callback = function(val)
+		Config.MinTravelDuration = val
+		print("⚙️ [Config] Min Travel Time:", val, "detik")
+	end
+})
+
+SettingsSection:Slider({
+	Title = "Jeda Aksi (Action Delay)",
+	Desc = "Jeda waktu interaksi tombol (detik).",
+	Value = { Min = 2, Max = 20, Default = 5 },
 	Callback = function(val)
 		Config.ActionDelay = val / 10
-		print("⚙️ [Config] Jeda Aksi diubah menjadi:", Config.ActionDelay, "detik")
+	end
+})
+
+SettingsSection:Input({
+	Title = "Jeda Mengulang (Restart Delay)",
+	Desc = "Jeda waktu tunggu sebelum mencoba kembali setelah gagal (detik).",
+	Value = tostring(Config.RestartDelay),
+	Placeholder = "Contoh: 3.0",
+	Callback = function(val)
+		local num = tonumber(val)
+		if num then
+			Config.RestartDelay = num
+			print("⚙️ [Config] Jeda mengulang diubah:", num, "detik")
+		else
+			warn("⚠️ Input jeda mengulang harus berupa angka!")
+		end
 	end
 })
 
 SettingsSection:Slider({
-	Title = "Jeda Siklus/Loop (Cycle Delay)",
-	Desc = "Jeda pengecekan data di dalam loop otomatisasi (detik).",
-	Value = { Min = 1, Max = 30, Default = 5 },
+	Title = "Jeda Siklus (Cycle Delay)",
+	Desc = "Jeda waktu pemeriksaan loop utama (detik).",
+	Value = { Min = 2, Max = 20, Default = 6 },
 	Callback = function(val)
 		Config.LoopWait = val / 10
-		print("⚙️ [Config] Jeda Loop diubah menjadi:", Config.LoopWait, "detik")
+		print("⚙️ [Config] Jeda siklus diubah:", Config.LoopWait, "detik")
 	end
 })
 
-SettingsSection:Slider({
-	Title = "Jeda Restart Siklus (Restart Delay)",
-	Desc = "Jeda tunggu sebelum mengulangi siklus pekerjaan baru (detik).",
-	Value = { Min = 10, Max = 100, Default = 25 },
-	Callback = function(val)
-		Config.RestartDelay = val / 10
-		print("⚙️ [Config] Jeda Ulang Siklus diubah menjadi:", Config.RestartDelay, "detik")
+SettingsSection:Button({
+	Title = "Paksa Reset Bot (Emergency Reset)",
+	Desc = "Menghentikan total semua loop dan melepas semua anchor.",
+	Callback = function()
+		Action_ResetAll()
+		print("⚙️ [Config] Reset manual dipicu dari UI.")
 	end
 })
-
 Window.Frame.Destroying:Connect(function()
 	if _G.MainCoreHook then _G.MainCoreHook:Disconnect() _G.MainCoreHook = nil end
 	if _G.MainCoreDialogHook then _G.MainCoreDialogHook:Disconnect() _G.MainCoreDialogHook = nil end
 	if _G.MainCoreJobHook then _G.MainCoreJobHook:Disconnect() _G.MainCoreJobHook = nil end
 end)
 
--- Cache TextLabel internal WindUI Paragraph (terpercaya, edit .Text langsung)
+-- Cache TextLabel WindUI
 local _statusLabel = nil
 local _saldoLabel  = nil
 
@@ -936,7 +1089,6 @@ local function ScanWindUILabels()
 			end
 		end
 	end
-	print('[UI] Label scan: statusLabel=', _statusLabel~=nil, 'saldoLabel=', _saldoLabel~=nil)
 end
 
 local function SetLabel(label, para, text)
@@ -944,33 +1096,26 @@ local function SetLabel(label, para, text)
 		label.Text = text
 		return
 	end
-	-- Fallback: coba semua API WindUI
 	if para then
 		pcall(function() para:SetDesc(text) end)
 		pcall(function() para:SetText(text) end)
 	end
 end
 
--- Jalankan scan setelah WindUI selesai render (delay 1 detik)
 task.delay(1, ScanWindUILabels)
 
--- Update Status Pekerjaan (real-time dari State, setiap 0.25 dtk)
+-- Polling Status & Saldo
 task.spawn(function()
 	while task.wait(0.25) do
 		if _G.MainCoreSession ~= session then break end
 		local text = string.format('Phase: %s | Koper: %s/%s',
 			tostring(State.Phase), tostring(State.Loaded), tostring(State.Total))
-		-- Scan ulang jika label belum ditemukan
-		if not _statusLabel or not _statusLabel.Parent then
-			ScanWindUILabels()
-		end
+		if not _statusLabel or not _statusLabel.Parent then ScanWindUILabels() end
 		SetLabel(_statusLabel, statusParagraph, text)
 	end
 end)
 
--- Update Saldo BCA Pocket
 task.spawn(function()
-	-- Cara 1: Langsung akses GUI TextLabel BCA Pocket (paling andal)
 	local function GetSaldoText()
 		local container = PlayerGui:FindFirstChild('Container')
 		local holder = container and container:FindFirstChild('Holder')
@@ -987,7 +1132,6 @@ task.spawn(function()
 		return saldo and saldo.Text or nil
 	end
 
-	-- Cara 2: ReplicaController (jika Cara 1 gagal)
 	local ok, RC = pcall(function()
 		return require(ReplicatedStorage
 			:WaitForChild('ClientContainer')
@@ -997,11 +1141,10 @@ task.spawn(function()
 
 	local function FormatRupiah(val)
 		if type(val) ~= 'number' then return tostring(val or '?') end
-		local r = string.format('%d', math.floor(val)):reverse():gsub('%d%d%d','%1.'):reverse():gsub('^%.',''  )
+		local r = string.format('%d', math.floor(val)):reverse():gsub('%d%d%d','%1.'):reverse():gsub('^%.','')
 		return 'Rp ' .. r
 	end
 
-	-- Pasang RC listener jika belum
 	if ok and not _G.MainCoreSaldoRegistered then
 		_G.MainCoreSaldoRegistered = true
 		RC.ReplicaOfClassCreated('Player_' .. LocalPlayer.UserId, function(replica)
@@ -1011,16 +1154,13 @@ task.spawn(function()
 			end
 			if not _saldoLabel or not _saldoLabel.Parent then ScanWindUILabels() end
 			SetLabel(_saldoLabel, saldoParagraph, FormatRupiah(GetPocket()))
-			print('[Saldo RC] Nilai awal:', GetPocket())
 			replica:ListenToChange({'Collab'}, function()
 				if not _saldoLabel or not _saldoLabel.Parent then ScanWindUILabels() end
 				SetLabel(_saldoLabel, saldoParagraph, FormatRupiah(GetPocket()))
-				print('[Saldo RC] Update:', GetPocket())
 			end)
 		end)
 	end
 
-	-- Polling fallback: update saldo setiap 1 dtk dari GUI langsung
 	while task.wait(1) do
 		if _G.MainCoreSession ~= session then break end
 		local guiText = GetSaldoText()
@@ -1031,4 +1171,4 @@ task.spawn(function()
 	end
 end)
 
-print("🎉 MainCore Autofarm Stabil & Siap Digunakan!")
+print("🎉 MainCore Humanized Auto-Farm Berhasil Diinisialisasi!")
