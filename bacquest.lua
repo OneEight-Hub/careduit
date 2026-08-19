@@ -6,9 +6,10 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
 local StatsService = game:GetService("Stats")
+local Lighting = game:GetService("Lighting")
 
 -- ==============================================================================
--- 1. PENGHAPUSAN LANGSUNG (DESTROY) GEDUNG BCA SAAT AWAL EKSEKUSI
+-- 1. PENGHAPUSAN LANGSUNG GEDUNG BCA & PERFORMANCE MODE (BOOST FPS)
 -- ==============================================================================
 local function DestroyBuildingInstances()
 	print("[Startup Cleaner] Menghancurkan (Destroy) BCA Tower / Gedung MyBCA...")
@@ -42,7 +43,31 @@ local function DestroyBuildingInstances()
 	end
 end
 
+local function EnablePerformanceMode()
+	print("⚡ [Performance Mode] Mengoptimalkan render map untuk timing presisi...")
+	
+	Lighting.GlobalShadows = false
+	Lighting.FogEnd = 9e9
+	Lighting.Brightness = 1
+	pcall(function()
+		for _, effect in ipairs(Lighting:GetChildren()) do
+			if effect:IsA("PostProcessEffect") or effect:IsA("BloomEffect") or effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect") or effect:IsA("ColorCorrectionEffect") then
+				effect.Enabled = false
+			end
+		end
+	end)
+
+	for _, obj in ipairs(Workspace:GetDescendants()) do
+		if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+			obj.Enabled = false
+		elseif obj:IsA("BasePart") then
+			obj.CastShadow = false
+		end
+	end
+end
+
 DestroyBuildingInstances()
+EnablePerformanceMode()
 
 -- ==============================================================================
 -- 2. CLEANUP HOOKS & UI LAMA
@@ -82,7 +107,7 @@ local ExpectedCarName = LocalPlayer.Name .. "sCar"
 
 -- CONFIGURABLE VALUES
 local Config = {
-	TweenSpeed = 180,        -- Kecepatan wajar CDID (~60-70 km/jam)
+	TweenSpeed = 70,        -- Kecepatan wajar CDID (~60-70 km/jam)
 	MinTravelDuration = 20, -- Durasi minimal anti-nerf (detik)
 	ActionDelay = 0.3,
 	LoopWait = 0.4,
@@ -194,7 +219,6 @@ local autoFarmToggle
 local statusParagraph
 local saldoParagraph
 
--- Info Tab Elements
 local antiAfkParagraph = AntiAfkSection:Paragraph({
 	Title = "Status Sistem Anti-AFK",
 	Desc = "🛡️ Status: AKTIF (Auto VirtualUser Input)",
@@ -219,7 +243,6 @@ local runtimeParagraph = StatsSection:Paragraph({
 	Image = "clock"
 })
 
--- Helper Reset Kamera
 local function ResetPlayerCamera()
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hum = char:WaitForChild("Humanoid", 5)
@@ -231,7 +254,6 @@ local function ResetPlayerCamera()
 	end
 end
 
--- Helper Teleport Halus
 SafeTeleportChar = function(targetCFrame)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
@@ -244,7 +266,6 @@ SafeTeleportChar = function(targetCFrame)
 	end
 end
 
--- Proximity Prompt Trigger
 local function TriggerPrompt(prompt, targetPart, isTrunk)
 	if not prompt then return false end
 
@@ -278,7 +299,6 @@ local function TriggerPrompt(prompt, targetPart, isTrunk)
 	return true
 end
 
--- Helper Temukan Mobil
 local function GetPlayerCar()
 	local vehicles = Workspace:FindFirstChild("Vehicles")
 	if not vehicles then return nil end
@@ -310,7 +330,6 @@ local function GetAmbilPrompt(bagasiPoint)
 	return nil
 end
 
--- Helper Duduk di Driver Seat
 local function EnterDriverSeat(car)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:WaitForChild("HumanoidRootPart", 5)
@@ -464,7 +483,7 @@ local function DriveCarNaturallyTo(car, targetPos, speed)
 end
 
 -- ==============================================================================
--- 4. HOOKS EVENT NETWORK & AUTO PERFECT MINIGAMES
+-- 4. HOOKS EVENT NETWORK & AUTO PERFECT MINIGAMES (KOMPENSASI KURVA JARAK JAUH)
 -- ==============================================================================
 _G.MainCoreDialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, data)
 	if action == "Start" then
@@ -529,7 +548,7 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		State.Carrying = (arg4 == true)
 		print(string.format("📦 Status Koper: %s/%s | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
 
-	-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR) ───
+	-- ─── 1. AUTO PERFECT MINIGAME: MUAT KOPER (GREEN BAR DENGAN DESELERASI KURVA) ───
 	elseif action == "LoadRound" and typeof(arg1) == "table" then
 		local greenSize = arg1.greenSize or arg1.greatSize or 0.18
 		local greenStart = arg1.greenStart or 0.5
@@ -541,11 +560,18 @@ _G.MainCoreHook = Network.OnClientEvent("BankCourier", function(action, arg1, ar
 		local ping = 0
 		pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
 
-		local delayTime = timeToHit - ping
+		local delayTime = timeToHit - ping - 0.01
 
-		while delayTime < 0.04 do
+		-- Kompensasi perlambatan osilasi saat target berada di ujung (> 0.65)
+		if centerGreen > 0.65 then
+			delayTime = delayTime + (period * 0.04)
+		end
+
+		while delayTime < 0.03 do
 			delayTime = delayTime + (2 * period)
 		end
+
+		print(string.format("🎯 [Minigame Koper] Target: %.3f | Ping: %.0fms | Mengirim LoadPress dlm: %.3fs", centerGreen, ping * 2000, delayTime))
 
 		local mySession = session
 		task.delay(delayTime, function()
@@ -738,7 +764,7 @@ local function RunDeliveryLoop()
 
 				if not State.AutoDelivering then break end
 
-				-- 2. Ambil koper dari bagasi
+				-- 2. Ambil koper dari bagasi (Posisi presisi di belakang BagasiPoint)
 				if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 40 then
 					State.IsBusy = true
 					print("[+] Mengambil koper dari bagasi...")
@@ -1168,4 +1194,4 @@ task.spawn(function()
 	end
 end)
 
-print("🎉 MainCore Stable Auto-Farm Berhasil Diperbarui!")
+print("🎉 MainCore Stable Auto-Farm, Anti-Nerf & Anti-AFK Berhasil Diinisialisasi!")
