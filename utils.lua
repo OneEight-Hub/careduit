@@ -1,3 +1,6 @@
+-- ==============================================================================
+-- CDID HUB - UTILITIES
+-- ==============================================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
@@ -7,7 +10,7 @@ local Utils = {}
 local LocalPlayer = Players.LocalPlayer
 
 function Utils.DestroyBuildingInstances()
-	print("[Startup Cleaner] Membersihkan asset berat...")
+	print("[Cleaner] Membersihkan BCA Tower Thamrin & Bangunan Berat...")
 	local map = Workspace:FindFirstChild("Map")
 	local building = map and map:FindFirstChild("Building")
 	if building then
@@ -31,6 +34,7 @@ function Utils.DestroyBuildingInstances()
 end
 
 function Utils.EnablePerformanceMode()
+	print("⚡ [Performance Mode] Mengoptimalkan grafik CDID...")
 	Lighting.GlobalShadows = false
 	Lighting.FogEnd = 9e9
 	Lighting.Brightness = 1
