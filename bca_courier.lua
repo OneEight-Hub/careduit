@@ -7,23 +7,6 @@ function BCA.Init(Window, Utils, Context)
 	local RunService = game:GetService("RunService")
 
 	local LocalPlayer = Players.LocalPlayer
-		-- Kode Baru (Dengan Timeout 10 detik dan proteksi pcall)
-	local ModulesFolder = ReplicatedStorage:WaitForChild("Modules", 10)
-	if not ModulesFolder then
-		warn("⚠️ [BCA Courier] Modules folder tidak ditemukan / belum siap.")
-		return
-	end
-	
-	local NetworkModule = ModulesFolder:WaitForChild("Network", 10)
-	if not NetworkModule then
-		warn("⚠️ [BCA Courier] Network module tidak ditemukan.")
-		return
-	end
-	
-	local Network = require(NetworkModule)
-	
-	local NpcDialogEvent = ReplicatedStorage:WaitForChild("NetworkContainer"):WaitForChild("RemoteEvents"):WaitForChild("NpcDialog")
-	local JobRemote = ReplicatedStorage:WaitForChild("NetworkContainer"):WaitForChild("RemoteEvents"):WaitForChild("Job")
 
 	-- CONFIGURABLE VALUES
 	local Config = {
@@ -47,11 +30,13 @@ function BCA.Init(Window, Utils, Context)
 		AutoLoading = false,
 		AutoDelivering = false,
 		LoadingActive = false,
-		DeliveryActive = false
+		DeliveryActive = false,
+		IsReady = false
 	}
 
 	local autoFarmToggle
 	local statusParagraph
+	local Network = nil
 
 	-- ==============================================================================
 	-- HELPER FUNCTIONS
@@ -247,142 +232,171 @@ function BCA.Init(Window, Utils, Context)
 	end
 
 	-- ==============================================================================
-	-- NETWORK HOOKS & EVENT LISTENERS
+	-- BACKGROUND LAZY INITIALIZER
 	-- ==============================================================================
-	local dialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, data)
-		if action == "Start" then
-			print("💬 [Dialog] Event dialog diterima -> Menyelesaikan...")
-			task.spawn(function()
-				task.wait(0.5)
-				NpcDialogEvent:FireServer("Finish", nil)
+	task.spawn(function()
+		while not Workspace:FindFirstChild("MY_BCA_COLLAB") do
+			task.wait(1.5)
+			if Context.Session ~= _G.MainCoreSession then return end
+		end
 
-				if firesignal then
-					pcall(firesignal, NpcDialogEvent.OnClientEvent, "Abort")
-				end
+		Utils.DestroyBuildingInstances()
+		Utils.EnablePerformanceMode()
 
-				ResetPlayerCamera()
+		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
+		local netModule = modules and modules:WaitForChild("Network", 15)
+		if netModule then
+			Network = require(netModule)
+		end
 
-				local Mf = Workspace:FindFirstChild("MY_BCA_COLLAB")
-				if Mf then
-					for _, p in ipairs(Mf:GetDescendants()) do
-						if p:IsA("ProximityPrompt") then
-							p.Enabled = true
+		local netContainer = ReplicatedStorage:WaitForChild("NetworkContainer", 15)
+		local remoteEvents = netContainer and netContainer:WaitForChild("RemoteEvents", 15)
+		local NpcDialogEvent = remoteEvents and remoteEvents:WaitForChild("NpcDialog", 15)
+		local JobRemote = remoteEvents and remoteEvents:WaitForChild("Job", 15)
+
+		if not Network or not NpcDialogEvent or not JobRemote then
+			warn("⚠️ [BCA Courier] Gagal menginisialisasi network remotes.")
+			return
+		end
+
+		local dialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action, data)
+			if action == "Start" then
+				print("💬 [Dialog] Event dialog diterima -> Menyelesaikan...")
+				task.spawn(function()
+					task.wait(0.5)
+					NpcDialogEvent:FireServer("Finish", nil)
+
+					if firesignal then
+						pcall(firesignal, NpcDialogEvent.OnClientEvent, "Abort")
+					end
+
+					ResetPlayerCamera()
+
+					local Mf = Workspace:FindFirstChild("MY_BCA_COLLAB")
+					if Mf then
+						for _, p in ipairs(Mf:GetDescendants()) do
+							if p:IsA("ProximityPrompt") then
+								p.Enabled = true
+							end
 						end
 					end
-				end
-			end)
-		end
-	end)
-	table.insert(Context.Hooks, dialogHook)
+				end)
+			end
+		end)
+		table.insert(Context.Hooks, dialogHook)
 
-	local jobHook = JobRemote.OnClientEvent:Connect(function(action, arg1)
-		if action == "SetJob" then
-			if arg1 == "BankCourier" then
+		local jobHook = JobRemote.OnClientEvent:Connect(function(action, arg1)
+			if action == "SetJob" then
+				if arg1 == "BankCourier" then
+					State.Phase = "Loading"
+					print("💼 [Job State] BankCourier Dimulai.")
+				elseif arg1 == "Unemployee" then
+					State.Phase = "Unemployee"
+					State.Loaded = 0
+					State.Total = 0
+					print("🛑 [Job State] Kembali ke Unemployee.")
+				end
+			end
+		end)
+		table.insert(Context.Hooks, jobHook)
+
+		local bankHook = Network.OnClientEvent("BankCourier", function(action, arg1, arg2, arg3, arg4)
+			if action == "Start" then
+				State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
 				State.Phase = "Loading"
-				print("💼 [Job State] BankCourier Dimulai.")
-			elseif arg1 == "Unemployee" then
+				print("📋 Total Koper:", State.Total)
+
+			elseif action == "Phase" then
+				State.Phase = arg1
+				if typeof(arg4) == "Vector3" then
+					State.TargetPos = arg4
+				elseif typeof(arg2) == "Vector3" then
+					State.TargetPos = arg2
+				elseif arg2 and arg2:IsA("BasePart") then
+					State.TargetPos = arg2.Position
+				end
+				print("🔄 Phase:", State.Phase, "| Target ATM:", tostring(State.TargetPos))
+
+			elseif action == "Koper" then
+				State.Loaded = arg1
+				State.Carrying = (arg4 == true)
+				print(string.format("📦 Status Koper: %s/%s | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
+
+			-- 1. Auto Perfect Minigame: Muat Koper
+			elseif action == "LoadRound" and typeof(arg1) == "table" then
+				local greenSize = arg1.greenSize or arg1.greatSize or 0.18
+				local greenStart = arg1.greenStart or 0.5
+				local period = math.max(arg1.period or 1, 0.1)
+
+				local centerGreen = greenStart + (greenSize / 2)
+				local timeToHit = centerGreen * period
+
+				local ping = 0
+				pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
+
+				local delayTime = timeToHit - ping - 0.01
+
+				if centerGreen > 0.65 then
+					delayTime = delayTime + (period * 0.04)
+				end
+
+				while delayTime < 0.03 do
+					delayTime = delayTime + (2 * period)
+				end
+
+				print(string.format("🎯 [Minigame Koper] Target: %.3f | Ping: %.0fms | Mengirim LoadPress dlm: %.3fs", centerGreen, ping * 2000, delayTime))
+
+				local curSession = Context.Session
+				task.delay(delayTime, function()
+					if _G.MainCoreSession ~= curSession then return end
+					Network:FireServer("BankCourier", "LoadPress")
+					print("✅ [Minigame Koper] LoadPress PERFECT terkirim!")
+				end)
+
+			-- 2. Auto Perfect Minigame: Setor ATM
+			elseif action == "SkillCheck" and typeof(arg1) == "table" then
+				local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
+				local targetAngle = arg1.zoneStart + (zoneWidth / 2)
+				local speed = arg1.speed or 1
+				local warnLead = arg1.warnLead or 0
+
+				local ping = 0
+				pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
+
+				local timeToHit = warnLead + (targetAngle / speed)
+				local delayTime = timeToHit - ping
+
+				local rotations = 0
+				while delayTime < 0.03 do
+					delayTime = delayTime + (360 / speed)
+					rotations = rotations + 1
+				end
+
+				local angleToSend = targetAngle + (rotations * 360)
+
+				local curSession = Context.Session
+				task.delay(delayTime, function()
+					if _G.MainCoreSession ~= curSession then return end
+					Network:FireServer("BankCourier", "SkillPress", angleToSend)
+					print("✅ [Minigame ATM] SkillPress PERFECT terkirim!")
+				end)
+
+			elseif action == "Complete" or action == "Returning" then
+				State.Phase = "Returning"
+				print("🏁 Semua ATM telah berhasil diisi!")
+
+			elseif action == "Stop" then
 				State.Phase = "Unemployee"
 				State.Loaded = 0
 				State.Total = 0
-				print("🛑 [Job State] Kembali ke Unemployee.")
+				print("🛑 Job Berhenti / Gaji Diterima.")
 			end
-		end
+		end)
+		table.insert(Context.Hooks, bankHook)
+
+		State.IsReady = true
+		print("✅ [BCA Courier] Event Listeners & Network Hook siap digunakan.")
 	end)
-	table.insert(Context.Hooks, jobHook)
-
-	local bankHook = Network.OnClientEvent("BankCourier", function(action, arg1, arg2, arg3, arg4)
-		if action == "Start" then
-			State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
-			State.Phase = "Loading"
-			print("📋 Total Koper:", State.Total)
-
-		elseif action == "Phase" then
-			State.Phase = arg1
-			if typeof(arg4) == "Vector3" then
-				State.TargetPos = arg4
-			elseif typeof(arg2) == "Vector3" then
-				State.TargetPos = arg2
-			elseif arg2 and arg2:IsA("BasePart") then
-				State.TargetPos = arg2.Position
-			end
-			print("🔄 Phase:", State.Phase, "| Target ATM:", tostring(State.TargetPos))
-
-		elseif action == "Koper" then
-			State.Loaded = arg1
-			State.Carrying = (arg4 == true)
-			print(string.format("📦 Status Koper: %s/%s | Membawa: %s", tostring(State.Loaded), tostring(State.Total), tostring(State.Carrying)))
-
-		-- 1. Auto Perfect Minigame: Muat Koper
-		elseif action == "LoadRound" and typeof(arg1) == "table" then
-			local greenSize = arg1.greenSize or arg1.greatSize or 0.18
-			local greenStart = arg1.greenStart or 0.5
-			local period = math.max(arg1.period or 1, 0.1)
-
-			local centerGreen = greenStart + (greenSize / 2)
-			local timeToHit = centerGreen * period
-
-			local ping = 0
-			pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
-
-			local delayTime = timeToHit - ping - 0.01
-
-			if centerGreen > 0.65 then
-				delayTime = delayTime + (period * 0.04)
-			end
-
-			while delayTime < 0.03 do
-				delayTime = delayTime + (2 * period)
-			end
-
-			print(string.format("🎯 [Minigame Koper] Target: %.3f | Ping: %.0fms | Mengirim LoadPress dlm: %.3fs", centerGreen, ping * 2000, delayTime))
-
-			local curSession = Context.Session
-			task.delay(delayTime, function()
-				if _G.MainCoreSession ~= curSession then return end
-				Network:FireServer("BankCourier", "LoadPress")
-				print("✅ [Minigame Koper] LoadPress PERFECT terkirim!")
-			end)
-
-		-- 2. Auto Perfect Minigame: Setor ATM
-		elseif action == "SkillCheck" and typeof(arg1) == "table" then
-			local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
-			local targetAngle = arg1.zoneStart + (zoneWidth / 2)
-			local speed = arg1.speed or 1
-			local warnLead = arg1.warnLead or 0
-
-			local ping = 0
-			pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
-
-			local timeToHit = warnLead + (targetAngle / speed)
-			local delayTime = timeToHit - ping
-
-			local rotations = 0
-			while delayTime < 0.03 do
-				delayTime = delayTime + (360 / speed)
-				rotations = rotations + 1
-			end
-
-			local angleToSend = targetAngle + (rotations * 360)
-
-			local curSession = Context.Session
-			task.delay(delayTime, function()
-				if _G.MainCoreSession ~= curSession then return end
-				Network:FireServer("BankCourier", "SkillPress", angleToSend)
-				print("✅ [Minigame ATM] SkillPress PERFECT terkirim!")
-			end)
-
-		elseif action == "Complete" or action == "Returning" then
-			State.Phase = "Returning"
-			print("🏁 Semua ATM telah berhasil diisi!")
-
-		elseif action == "Stop" then
-			State.Phase = "Unemployee"
-			State.Loaded = 0
-			State.Total = 0
-			print("🛑 Job Berhenti / Gaji Diterima.")
-		end
-	end)
-	table.insert(Context.Hooks, bankHook)
 
 	-- ==============================================================================
 	-- AUTOFARM SEQUENCES
@@ -508,7 +522,6 @@ function BCA.Init(Window, Utils, Context)
 					local hrp = char and char:FindFirstChild("HumanoidRootPart")
 					local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
-					-- Menyetir ke titik ATM
 					if not State.Carrying and State.TargetPos and distToAtm > 25 then
 						State.IsBusy = true
 						print(string.format("[+] Menuju target ATM berikutnya (Sisa koper di bagasi: %d)...", State.Loaded))
@@ -526,7 +539,6 @@ function BCA.Init(Window, Utils, Context)
 
 					if not State.AutoDelivering then break end
 
-					-- Mengambil koper dari bagasi
 					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 40 then
 						State.IsBusy = true
 						print("[+] Mengambil koper dari bagasi...")
@@ -544,7 +556,6 @@ function BCA.Init(Window, Utils, Context)
 
 					if not State.AutoDelivering then break end
 
-					-- Menyetor ke ATM
 					if State.Carrying and State.TargetPos then
 						State.IsBusy = true
 						print("[+] Berpindah tepat ke depan mesin ATM...")
@@ -552,7 +563,9 @@ function BCA.Init(Window, Utils, Context)
 						task.wait(Config.ActionDelay)
 
 						print("[+] Memulai pengisian ATM...")
-						Network:FireServer("BankCourier", "FillStart")
+						if Network then
+							Network:FireServer("BankCourier", "FillStart")
+						end
 
 						local waitFill = os.clock()
 						while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 25) do
@@ -661,6 +674,18 @@ function BCA.Init(Window, Utils, Context)
 		Value = false,
 		Callback = function(active)
 			if State.AutoFarmActive == active then return end
+
+			if active and not Workspace:FindFirstChild("MY_BCA_COLLAB") then
+				warn("⚠️ [BCA Courier] Kamu belum berada di map gameplay! Silakan pilih server/map terlebih dahulu.")
+				task.spawn(function()
+					task.wait(0.1)
+					if autoFarmToggle then
+						pcall(function() autoFarmToggle:Set(false) end)
+						pcall(function() autoFarmToggle:SetValue(false) end)
+					end
+				end)
+				return
+			end
 
 			State.AutoFarmActive = active
 			if active then
