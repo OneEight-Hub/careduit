@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB INITIALIZER
+-- CDID HUB INITIALIZER (LOBBY & GAMEPLAY SAFE)
 -- ==============================================================================
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,22 +23,20 @@ local Context = {
 
 -- Load Utilities
 local Utils = _G.CDID_LoadModule("utils.lua")
-Utils.DestroyBuildingInstances()
-Utils.EnablePerformanceMode()
 Utils.SetupAntiAFK()
 
 -- Init WindUI Library
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
 local Window = WindUI:CreateWindow({
-	Title = "CDID Multi-Job Auto Farm",
+	Title = "CDID Multi-Job Hub",
 	Author = "by ASRock",
 	Folder = "cdid_hub",
 	Icon = "solar:car-bold-duotone",
 	NewElements = true,
 	HideSearchBar = true,
 	OpenButton = {
-		Title = "Open CDID Hub",
+		Title = "Open Hub",
 		Enabled = true,
 		Draggable = true,
 		Scale = 0.5
@@ -49,32 +47,42 @@ local Window = WindUI:CreateWindow({
 local DashTab = Window:Tab({ Title = "Dashboard", Icon = "solar:home-2-bold" })
 local StatsSection = DashTab:Section({ Title = "System & Game Stats" })
 
-local saldoParagraph = StatsSection:Paragraph({ Title = "Saldo BCA Pocket", Desc = "Membaca data..." })
+local saldoParagraph = StatsSection:Paragraph({ Title = "Saldo BCA Pocket", Desc = "Menunggu masuk ke map..." })
 local fpsParagraph = StatsSection:Paragraph({ Title = "Frame Rate (FPS)", Desc = "Membaca..." })
 local pingParagraph = StatsSection:Paragraph({ Title = "Ping Jaringan", Desc = "Membaca..." })
 local runtimeParagraph = StatsSection:Paragraph({ Title = "Runtime Hub", Desc = "00:00:00" })
 
--- Monitor Saldo Pocket
+-- Safe Saldo Listener (Hanya aktif jika ClientContainer sudah ada)
 task.spawn(function()
-	local ok, RC = pcall(function()
-		return require(ReplicatedStorage:WaitForChild('ClientContainer'):WaitForChild('Controller'):WaitForChild('ReplicaController'))
-	end)
 	local function FormatRupiah(val)
 		if type(val) ~= 'number' then return tostring(val or '?') end
 		local r = string.format('%d', math.floor(val)):reverse():gsub('%d%d%d','%1.'):reverse():gsub('^%.','')
 		return 'Rp ' .. r
 	end
 
-	if ok then
-		RC.ReplicaOfClassCreated('Player_' .. LocalPlayer.UserId, function(replica)
-			local function update()
-				local c = replica.Data and replica.Data.Collab
-				local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
-				pcall(function() saldoParagraph:SetDesc(FormatRupiah(p)) end)
+	while task.wait(2) do
+		if Context.Session ~= _G.MainCoreSession then break end
+
+		local clientCont = ReplicatedStorage:FindFirstChild("ClientContainer")
+		if clientCont then
+			local controller = clientCont:FindFirstChild("Controller")
+			local replicaMod = controller and controller:FindFirstChild("ReplicaController")
+			if replicaMod and not _G.MainCoreSaldoRegistered then
+				local ok, RC = pcall(require, replicaMod)
+				if ok and RC then
+					_G.MainCoreSaldoRegistered = true
+					RC.ReplicaOfClassCreated('Player_' .. LocalPlayer.UserId, function(replica)
+						local function update()
+							local c = replica.Data and replica.Data.Collab
+							local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
+							pcall(function() saldoParagraph:SetDesc(FormatRupiah(p)) end)
+						end
+						update()
+						replica:ListenToChange({'Collab'}, update)
+					end)
+				end
 			end
-			update()
-			replica:ListenToChange({'Collab'}, update)
-		end)
+		end
 	end
 end)
 
@@ -109,17 +117,14 @@ task.spawn(function()
 end)
 
 -- ==============================================================================
--- LOAD JOB MODULES
+-- LOAD FITUR MODULES
 -- ==============================================================================
--- 1. BCA Courier
-local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
-BCAModule.Init(Window, Utils, Context)
-
+-- 1. Server Manager (Bisa dipakai di Lobby maupun di dalam Game)
 local ServerModule = _G.CDID_LoadModule("server_manager.lua")
 ServerModule.Init(Window, Utils, Context)
 
--- 2. Tambah Job Lain Nanti Cukup Tambahkan Baris Berikut:
--- local OtherJob = _G.CDID_LoadModule("modules/job_template.lua")
--- OtherJob.Init(Window, Utils, Context)
+-- 2. BCA Courier Auto Farm
+local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
+BCAModule.Init(Window, Utils, Context)
 
-print("🚀 CDID Hub Loaded Successfully!")
+print("🚀 CDID Hub Berhasil Dimuat!")
