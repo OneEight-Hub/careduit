@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (INTEGRATED WITH UICREATE FLOATING DASHBOARD)
+-- CDID HUB - BCA COURIER (FULL STABLE & HYBRID SALDO TRACKER)
 -- ==============================================================================
 local BCA = {}
 
@@ -10,6 +10,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	local RunService = game:GetService("RunService")
 	local LocalPlayer = Players.LocalPlayer
 
+	-- CONFIGURABLE VALUES
 	local Config = {
 		TweenSpeed = 180,
 		MinTravelDuration = 20,
@@ -18,6 +19,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		RestartDelay = 2.0
 	}
 
+	-- STATE & STATS
 	local State = {
 		Total = 0,
 		Loaded = 0,
@@ -41,10 +43,13 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	local Network = nil
 	local FloatingDash = nil
 
+	-- ==============================================================================
+	-- HELPER FUNCTIONS
+	-- ==============================================================================
 	local function FormatRupiah(val)
-		if type(val) ~= 'number' then return tostring(val or 'Rp 0') end
-		local r = string.format('%d', math.floor(val)):reverse():gsub('%d%d%d','%1.'):reverse():gsub('^%.','')
-		return 'Rp ' .. r
+		if type(val) ~= "number" then return tostring(val or "Rp 0") end
+		local r = string.format("%d", math.floor(val)):reverse():gsub("%d%d%d", "%1."):reverse():gsub("^%.", "")
+		return "Rp " .. r
 	end
 
 	local function GetValidHumanoid()
@@ -70,7 +75,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		local vehicles = Workspace:FindFirstChild("Vehicles")
 		if not vehicles then return nil end
 		for _, v in ipairs(vehicles:GetChildren()) do
-			if v.Name:find(LocalPlayer.Name, 1, true) then return v end
+			if v.Name:find(LocalPlayer.Name, 1, true) then
+				return v
+			end
 		end
 		return nil
 	end
@@ -165,6 +172,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 		primary.Anchored = false
 		local startTime = os.clock()
+		print(string.format("🚗 [Safe Park] Menyetir ke titik parkir ATM (Jarak: %.0f stud | Durasi: %.1f dtk)...", dist, duration))
 
 		while (os.clock() - startTime) < duration and State.AutoDelivering do
 			local hum = GetValidHumanoid()
@@ -212,41 +220,92 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		task.wait(Config.ActionDelay)
 	end
 
-	-- LAZY INITIALIZER & SALDO TRACKER
+	-- ==============================================================================
+	-- LAZY INITIALIZER & HYBRID SALDO TRACKER
+	-- ==============================================================================
 	task.spawn(function()
 		while not Workspace:FindFirstChild("MY_BCA_COLLAB") do
 			task.wait(1.5)
 			if Context.Session ~= _G.MainCoreSession then return end
 		end
 
-		local clientCont = ReplicatedStorage:WaitForChild("ClientContainer", 15)
-		if clientCont then
-			local controller = clientCont:WaitForChild("Controller", 15)
-			local replicaMod = controller and controller:WaitForChild("ReplicaController", 15)
-			if replicaMod then
-				local ok, RC = pcall(require, replicaMod)
-				if ok and RC then
-					RC.ReplicaOfClassCreated('Player_' .. LocalPlayer.UserId, function(replica)
-						local function update(data)
-							local c = data and data.Collab
-							local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
-							if p then
-								State.CurrentSaldoText = FormatRupiah(p)
-								if FloatingDash then FloatingDash.UpdateSaldo(State.CurrentSaldoText) end
-							end
-						end
-						update(replica.Data)
-						replica:ListenToChange({'Collab'}, function(newCollab)
-							local p = newCollab and newCollab.MyBca2026 and newCollab.MyBca2026.PocketRupiah
-							if p then
-								State.CurrentSaldoText = FormatRupiah(p)
-								if FloatingDash then FloatingDash.UpdateSaldo(State.CurrentSaldoText) end
-							end
-						end)
-					end)
+		local function GetSaldoFromGui()
+			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+			local container = pGui and pGui:FindFirstChild("Container")
+			local holder = container and container:FindFirstChild("Holder")
+			local appCont = holder and holder:FindFirstChild("AppCountainer")
+			local myBca = appCont and appCont:FindFirstChild("MyBca")
+			local home = myBca and myBca:FindFirstChild("Home")
+			local main = home and home:FindFirstChild("Main")
+			local frame = main and main:FindFirstChild("Frame")
+			local pocket = frame and frame:FindFirstChild("3b_POCKETRUPIAH")
+			local balFr = pocket and pocket:FindFirstChild("BalanceFrame")
+			local scroll = balFr and balFr:FindFirstChild("ScrolingFrame")
+			local ep = scroll and scroll:FindFirstChild("EventPocket")
+			local saldo = ep and ep:FindFirstChild("Saldo")
+			return saldo and saldo.Text or nil
+		end
+
+		local function SetupReplicaSaldo()
+			local clientCont = ReplicatedStorage:FindFirstChild("ClientContainer")
+			local controller = clientCont and clientCont:FindFirstChild("Controller")
+			local replicaMod = controller and controller:FindFirstChild("ReplicaController")
+			if not replicaMod then return false end
+
+			local ok, RC = pcall(require, replicaMod)
+			if not ok or not RC then return false end
+
+			local function ApplySaldo(val)
+				if val then
+					State.CurrentSaldoText = FormatRupiah(val)
+					if FloatingDash then FloatingDash.UpdateSaldo(State.CurrentSaldoText) end
 				end
 			end
+
+			local className = "Player_" .. LocalPlayer.UserId
+			if RC.Replicas then
+				for _, rep in pairs(RC.Replicas) do
+					if rep.Class == className or rep.ClassName == className then
+						local c = rep.Data and rep.Data.Collab
+						local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
+						ApplySaldo(p)
+						rep:ListenToChange({"Collab"}, function(newCollab)
+							local np = newCollab and newCollab.MyBca2026 and newCollab.MyBca2026.PocketRupiah
+							ApplySaldo(np)
+						end)
+						break
+					end
+				end
+			end
+
+			RC.ReplicaOfClassCreated(className, function(replica)
+				local c = replica.Data and replica.Data.Collab
+				local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
+				ApplySaldo(p)
+
+				replica:ListenToChange({"Collab"}, function(newCollab)
+					local np = newCollab and newCollab.MyBca2026 and newCollab.MyBca2026.PocketRupiah
+					ApplySaldo(np)
+				end)
+			end)
+
+			return true
 		end
+
+		SetupReplicaSaldo()
+
+		task.spawn(function()
+			while task.wait(1) do
+				if Context.Session ~= _G.MainCoreSession then break end
+				local guiText = GetSaldoFromGui()
+				if guiText and guiText ~= "" then
+					State.CurrentSaldoText = guiText
+					if FloatingDash then
+						FloatingDash.UpdateSaldo(State.CurrentSaldoText)
+					end
+				end
+			end
+		end)
 
 		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
 		local netModule = modules and modules:WaitForChild("Network", 15)
@@ -351,7 +410,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		table.insert(Context.Hooks, bankHook)
 	end)
 
-	-- AUTOFARM ACTIONS
+	-- ==============================================================================
+	-- AUTOFARM SEQUENCES
+	-- ==============================================================================
 	local function Action_StartJob()
 		local Mf = Workspace:WaitForChild("MY_BCA_COLLAB")
 		local StartNpc = Mf:WaitForChild("NPC_START_JOB")
@@ -509,7 +570,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		end)
 	end
 
+	-- ==============================================================================
 	-- UI WINDUI TAB SETUP
+	-- ==============================================================================
 	local BCATab = Window:Tab({
 		Title = "BCA Courier",
 		Icon = "solar:box-minimalistic-bold"
@@ -520,7 +583,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	local SettingsSection = BCATab:Section({ Title = "Konfigurasi Kecepatan & Anti-Nerf" })
 	local ShortcutsSection = BCATab:Section({ Title = "Pintasan Teleport" })
 
-	-- Tombol Open Floating Dashboard
 	DashboardSection:Button({
 		Title = "Toggle Floating Dashboard (BCA Pocket)",
 		Desc = "Buka/Tutup overlay mini transparan untuk monitor Saldo & Trips secara live.",
@@ -668,7 +730,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		Image = "info"
 	})
 
-	-- Live Status Sync
 	task.spawn(function()
 		while task.wait(0.3) do
 			if _G.MainCoreSession ~= Context.Session then break end
