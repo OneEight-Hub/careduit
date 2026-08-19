@@ -115,6 +115,9 @@ end)
 local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
 BCAModule.Init(Window, Utils, Context)
 
+local ServerModule = _G.CDID_LoadModule("server_manager.lua")
+ServerModule.Init(Window, Utils, Context)
+
 -- 2. Tambah Job Lain Nanti Cukup Tambahkan Baris Berikut:
 -- local OtherJob = _G.CDID_LoadModule("modules/job_template.lua")
 -- OtherJob.Init(Window, Utils, Context)
