@@ -1,8 +1,7 @@
 -- ==============================================================================
--- CDID HUB - MAIN INITIALIZER
+-- CDID HUB - MAIN INITIALIZER (UNIVERSAL ONLY)
 -- ==============================================================================
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StatsService = game:GetService("Stats")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
@@ -25,7 +24,7 @@ local Context = {
 local Utils = _G.CDID_LoadModule("utils.lua")
 Utils.SetupAntiAFK()
 
--- Init WindUI
+-- Init WindUI Library
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -43,47 +42,13 @@ local Window = WindUI:CreateWindow({
 	}
 })
 
--- DASHBOARD TAB
+-- DASHBOARD UNIVERSAL (HANYA INFO GLOBAL)
 local DashTab = Window:Tab({ Title = "Dashboard", Icon = "solar:home-2-bold" })
-local StatsSection = DashTab:Section({ Title = "System & Game Stats" })
+local StatsSection = DashTab:Section({ Title = "Universal System Stats" })
 
-local saldoParagraph = StatsSection:Paragraph({ Title = "Saldo BCA Pocket", Desc = "Menunggu masuk ke map..." })
-local fpsParagraph = StatsSection:Paragraph({ Title = "Frame Rate (FPS)", Desc = "Membaca..." })
-local pingParagraph = StatsSection:Paragraph({ Title = "Ping Jaringan", Desc = "Membaca..." })
-local runtimeParagraph = StatsSection:Paragraph({ Title = "Runtime Hub", Desc = "00:00:00" })
-
--- Safe Saldo Listener (Non-blocking lobby check)
-task.spawn(function()
-	local function FormatRupiah(val)
-		if type(val) ~= 'number' then return tostring(val or '?') end
-		local r = string.format('%d', math.floor(val)):reverse():gsub('%d%d%d','%1.'):reverse():gsub('^%.','')
-		return 'Rp ' .. r
-	end
-
-	while task.wait(2) do
-		if Context.Session ~= _G.MainCoreSession then break end
-
-		local clientCont = ReplicatedStorage:FindFirstChild("ClientContainer")
-		local controller = clientCont and clientCont:FindFirstChild("Controller")
-		local replicaMod = controller and controller:FindFirstChild("ReplicaController")
-
-		if replicaMod and not _G.MainCoreSaldoRegistered then
-			local ok, RC = pcall(require, replicaMod)
-			if ok and RC then
-				_G.MainCoreSaldoRegistered = true
-				RC.ReplicaOfClassCreated('Player_' .. LocalPlayer.UserId, function(replica)
-					local function update()
-						local c = replica.Data and replica.Data.Collab
-						local p = c and c.MyBca2026 and c.MyBca2026.PocketRupiah
-						pcall(function() saldoParagraph:SetDesc(FormatRupiah(p)) end)
-					end
-					update()
-					replica:ListenToChange({'Collab'}, update)
-				end)
-			end
-		end
-	end
-end)
+local fpsParagraph = StatsSection:Paragraph({ Title = "Frame Rate (FPS)", Desc = "Membaca...", Image = "monitor" })
+local pingParagraph = StatsSection:Paragraph({ Title = "Ping Jaringan", Desc = "Membaca...", Image = "wifi" })
+local runtimeParagraph = StatsSection:Paragraph({ Title = "Total Runtime Hub", Desc = "00:00:00", Image = "clock" })
 
 -- Performance Monitor (FPS, Ping, Runtime)
 task.spawn(function()
@@ -122,8 +87,8 @@ end)
 local ServerModule = _G.CDID_LoadModule("server_manager.lua")
 ServerModule.Init(Window, Utils, Context)
 
--- 2. BCA Courier
+-- 2. BCA Courier (Passing WindUI object agar bisa spawn sub-window baru)
 local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
-BCAModule.Init(Window, Utils, Context)
+BCAModule.Init(Window, Utils, Context, WindUI)
 
 print("🚀 CDID Hub Loaded Successfully!")
