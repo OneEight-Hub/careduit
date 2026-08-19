@@ -1,12 +1,11 @@
 -- ==============================================================================
--- CDID HUB - MAIN INITIALIZER (UNIVERSAL ONLY)
+-- CDID HUB - MAIN INITIALIZER
 -- ==============================================================================
 local Players = game:GetService("Players")
 local StatsService = game:GetService("Stats")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
--- Bersihkan Hook Sesi Sebelumnya
 if _G.MainCoreHooks then
 	for _, conn in ipairs(_G.MainCoreHooks) do pcall(function() conn:Disconnect() end) end
 end
@@ -20,11 +19,12 @@ local Context = {
 	Hooks = _G.MainCoreHooks
 }
 
--- Load Utils & Anti-AFK
+-- Load Utils & UICreate
 local Utils = _G.CDID_LoadModule("utils.lua")
+local UICreate = _G.CDID_LoadModule("uicreate.lua")
 Utils.SetupAntiAFK()
 
--- Init WindUI Library
+-- Init WindUI
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -42,7 +42,7 @@ local Window = WindUI:CreateWindow({
 	}
 })
 
--- DASHBOARD UNIVERSAL (HANYA INFO GLOBAL)
+-- DASHBOARD UNIVERSAL (HANYA METRIK GLOBAL)
 local DashTab = Window:Tab({ Title = "Dashboard", Icon = "solar:home-2-bold" })
 local StatsSection = DashTab:Section({ Title = "Universal System Stats" })
 
@@ -87,8 +87,8 @@ end)
 local ServerModule = _G.CDID_LoadModule("server_manager.lua")
 ServerModule.Init(Window, Utils, Context)
 
--- 2. BCA Courier (Passing WindUI object agar bisa spawn sub-window baru)
+-- 2. BCA Courier (Diberikan UICreate)
 local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
-BCAModule.Init(Window, Utils, Context, WindUI)
+BCAModule.Init(Window, Utils, Context, UICreate)
 
 print("🚀 CDID Hub Loaded Successfully!")
