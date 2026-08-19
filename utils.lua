@@ -1,49 +1,161 @@
 -- ==============================================================================
--- CDID HUB - UTILITIES (MAP & MELAWAI DYNAMIC NO-RENDER MODE)
+-- CDID HUB - UTILITIES (SMART PLATFORM 500x500 & AGGRESSIVE MAP CLEANER)
 -- ==============================================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
 
 local Utils = {}
 local LocalPlayer = Players.LocalPlayer
 
--- Fungsi helper untuk membuat part/tekstur transparan tanpa merusak fisik collision
-local function MakePartInvisible(obj)
-	if obj:IsA("BasePart") then
-		obj.Transparency = 1
-		obj.CastShadow = false
-		obj.Material = Enum.Material.SmoothPlastic
-	elseif obj:IsA("Decal") or obj:IsA("Texture") then
-		obj.Transparency = 1
-	elseif obj:IsA("SurfaceAppearance") then
-		pcall(function() obj:Destroy() end)
+-- State Internal Platform
+local GiantPlatform = nil
+local PlatformConn = nil
+local RespawnConn = nil
+
+-- Helper Deteksi Mobil Player
+local function GetPlayerCar()
+	local vehicles = Workspace:FindFirstChild("Vehicles")
+	if not vehicles then return nil end
+	for _, v in ipairs(vehicles:GetChildren()) do
+		if v.Name:find(LocalPlayer.Name, 1, true) then
+			return v
+		end
 	end
+	return nil
 end
 
--- Fungsi pemindai dan pemasang listener dinamis pada folder target
-local function ApplyNoRenderToFolder(folderInstance, connectionKey)
-	if not folderInstance then return end
-
-	-- 1. Scan semua objek yang sudah ada saat ini
-	for _, obj in ipairs(folderInstance:GetDescendants()) do
-		MakePartInvisible(obj)
+-- Helper Pembuatan/Pengecekan Part Platform
+local function EnsurePlatformPart()
+	if not GiantPlatform or not GiantPlatform.Parent then
+		GiantPlatform = Instance.new("Part")
+		GiantPlatform.Name = "CDID_SmartPlatform"
+		GiantPlatform.Size = Vector3.new(500, 2, 500)
+		GiantPlatform.Anchored = true
+		GiantPlatform.CanCollide = true
+		GiantPlatform.Transparency = 1 -- Ubah ke 0.5 jika ingin melihat bentuk fisiknya
+		GiantPlatform.Material = Enum.Material.SmoothPlastic
+		GiantPlatform.TopSurface = Enum.SurfaceType.Smooth
+		GiantPlatform.Parent = Workspace
 	end
-	MakePartInvisible(folderInstance)
+	return GiantPlatform
+end
 
-	-- 2. Listener Realtime (Tangkap streaming/asset baru yang baru di-render)
-	if not _G[connectionKey] then
-		_G[connectionKey] = folderInstance.DescendantAdded:Connect(function(newObj)
-			MakePartInvisible(newObj)
+-- ==============================================================================
+-- 1. SMART DYNAMIC PLATFORM (PLAYER & MOBIL + ANTI-RESPAWN)
+-- ==============================================================================
+function Utils.StartGiantPlatform()
+	EnsurePlatformPart()
+
+	-- A. Proteksi Respawn: Snap platform seketika di bawah karakter baru
+	if RespawnConn then RespawnConn:Disconnect() end
+	RespawnConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
+		local hrp = newChar:WaitForChild("HumanoidRootPart", 10)
+		if hrp then
+			local plate = EnsurePlatformPart()
+			plate.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y - 3.2, hrp.Position.Z)
+			print("🔄 [Safe Platform] Karakter respawn -> Platform di-snap ke posisi spawn baru.")
+		end
+	end)
+
+	-- B. Heartbeat Per-Frame Tracker (Smart Follow: Mobil vs Player)
+	if PlatformConn then PlatformConn:Disconnect() end
+	PlatformConn = RunService.Heartbeat:Connect(function()
+		local plate = EnsurePlatformPart()
+
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local car = GetPlayerCar()
+
+		-- Jangan update jika karakter sedang mati/ragdoll
+		if hum and hum.Health <= 0 then return end
+
+		-- Prioritas 1: Jika player sedang menyetir di mobil
+		if hum and hum.Sit and car then
+			local carPrimary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
+			if carPrimary then
+				plate.CFrame = CFrame.new(carPrimary.Position.X, carPrimary.Position.Y - 2.8, carPrimary.Position.Z)
+				return
+			end
+		end
+
+		-- Prioritas 2: Jika player sedang jalan kaki / di luar mobil
+		if hrp then
+			plate.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y - 3.2, hrp.Position.Z)
+		end
+	end)
+
+	print("🛡️ [Safe Platform] Smart Platform 500x500 aktif menopang mobil & player.")
+end
+
+function Utils.StopGiantPlatform()
+	if PlatformConn then
+		PlatformConn:Disconnect()
+		PlatformConn = nil
+	end
+	if RespawnConn then
+		RespawnConn:Disconnect()
+		RespawnConn = nil
+	end
+	if GiantPlatform then
+		GiantPlatform:Destroy()
+		GiantPlatform = nil
+	end
+	print("🛑 [Safe Platform] Smart Platform dinonaktifkan.")
+end
+
+-- ==============================================================================
+-- 2. AGGRESSIVE MAP CLEANER (DESTROY MAP, MELAWAI & NON-ESSENTIALS)
+-- ==============================================================================
+function Utils.DestroyHeavyMaps()
+	-- Pastikan platform sudah aktif sebelum map dihapus
+	Utils.StartGiantPlatform()
+
+	-- 1. Hapus Total Folder Map
+	local map = Workspace:FindFirstChild("Map")
+	if map then
+		map:Destroy()
+		print("🗑️ [Cleaner] Folder Workspace.Map berhasil dihapus total.")
+	end
+
+	-- 2. Hapus Total Folder MELAWAI
+	local melawai = Workspace:FindFirstChild("MELAWAI") or Workspace:FindFirstChild("Melawai")
+	if melawai then
+		melawai:Destroy()
+		print("🗑️ [Cleaner] Folder Workspace.MELAWAI berhasil dihapus total.")
+	end
+
+	-- 3. Hapus Gedung Collab BCA (Kecuali NPC, Job, dan ATM)
+	local myBcaCollab = Workspace:FindFirstChild("MY_BCA_COLLAB")
+	if myBcaCollab then
+		for _, item in ipairs(myBcaCollab:GetChildren()) do
+			local name = item.Name:lower()
+			if (name:find("building") or name:find("gedung") or name:find("tower")) and not name:find("npc") and not name:find("job") and not name:find("atm") then
+				item:Destroy()
+			end
+		end
+	end
+
+	-- 4. Listener jika Map / MELAWAI di-spawn ulang oleh game
+	if not _G.CDID_MapDestroyListener then
+		_G.CDID_MapDestroyListener = Workspace.ChildAdded:Connect(function(child)
+			local name = child.Name:upper()
+			if name == "MAP" or name == "MELAWAI" then
+				task.wait(0.1)
+				child:Destroy()
+				print("🗑️ [Cleaner] Map respawn berhasil dicegat & dihapus.")
+			end
 		end)
 	end
+
+	-- 5. Optimasi Efek Visual & Lighting
+	Utils.EnablePerformanceMode()
 end
 
-function Utils.EnableNoRenderMode()
-	print("⚡ [Performance Mode] Mengaktifkan Dynamic No-Render (Map, Melawai & Collab)...")
-
-	-- 1. Optimasi Lighting Global
+function Utils.EnablePerformanceMode()
 	Lighting.GlobalShadows = false
 	Lighting.FogEnd = 9e9
 	Lighting.Brightness = 1
@@ -54,42 +166,6 @@ function Utils.EnableNoRenderMode()
 		end
 	end
 
-	-- 2. Transparankan folder Map (Beserta Realtime Stream Listener)
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		ApplyNoRenderToFolder(map, "CDID_MapDescendantConn")
-	end
-
-	-- 3. Transparankan folder MELAWAI (Beserta Realtime Stream Listener)
-	local melawai = Workspace:FindFirstChild("MELAWAI") or Workspace:FindFirstChild("Melawai")
-	if melawai then
-		ApplyNoRenderToFolder(melawai, "CDID_MelawaiDescendantConn")
-	end
-
-	-- 4. Transparankan part collab BCA (Kecuali NPC, Job, dan ATM)
-	local myBcaCollab = Workspace:FindFirstChild("MY_BCA_COLLAB")
-	if myBcaCollab then
-		for _, item in ipairs(myBcaCollab:GetChildren()) do
-			local name = item.Name:lower()
-			if not name:find("npc") and not name:find("job") and not name:find("atm") then
-				ApplyNoRenderToFolder(item, "CDID_BcaItemConn_" .. item.Name)
-			end
-		end
-	end
-
-	-- 5. Tangkap Folder Baru jika MELAWAI / Map baru di-spawn belakangan di Workspace
-	if not _G.CDID_WorkspaceFolderListener then
-		_G.CDID_WorkspaceFolderListener = Workspace.ChildAdded:Connect(function(child)
-			local name = child.Name:upper()
-			if name == "MAP" then
-				ApplyNoRenderToFolder(child, "CDID_MapDescendantConn")
-			elseif name == "MELAWAI" then
-				ApplyNoRenderToFolder(child, "CDID_MelawaiDescendantConn")
-			end
-		end)
-	end
-
-	-- 6. Matikan partikel visual di Workspace
 	for _, obj in ipairs(Workspace:GetDescendants()) do
 		if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
 			obj.Enabled = false
@@ -103,11 +179,11 @@ function Utils.EnableNoRenderMode()
 			end
 		end)
 	end
-
-	print("✅ [Performance Mode] Map & Melawai berhasil dibuat invisible dinamis.")
 end
 
--- Teleport dengan pengamanan anchor
+-- ==============================================================================
+-- 3. TELEPORTATION & PROMPT INTERACTION UTILITIES
+-- ==============================================================================
 function Utils.SafeTeleportChar(targetCFrame, delayTime)
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 	local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -120,7 +196,6 @@ function Utils.SafeTeleportChar(targetCFrame, delayTime)
 	end
 end
 
--- Interaksi Prompt dengan Freezing Anchor (Anti-Void)
 function Utils.TriggerPrompt(prompt, targetPart, isTrunk)
 	if not prompt then return false end
 	prompt.Enabled = true
@@ -143,6 +218,7 @@ function Utils.TriggerPrompt(prompt, targetPart, isTrunk)
 		task.wait(0.1)
 	end
 
+	-- Freeze sesaat selama trigger interaksi
 	hrp.Anchored = true
 
 	if fireproximityprompt then
