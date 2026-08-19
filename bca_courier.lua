@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (FULL FINANCIAL ANALYTICS)
+-- CDID HUB - BCA COURIER (FULL STABLE, ANTI-RUBBERBAND & FINANCIAL ANALYTICS)
 -- ==============================================================================
 local BCA = {}
 
@@ -36,7 +36,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 		TotalTrips = 0,
 
-		-- Finansial Saldo BCA Pocket
+		-- Financial Analytics
 		StartSaldo = nil,
 		CurrentSaldo = 0,
 		LastGaji = 0,
@@ -48,6 +48,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		EarnedText = "+Rp 0"
 	}
 
+	local isDrivingActive = false
 	local autoFarmToggle
 	local statusParagraph
 	local Network = nil
@@ -178,13 +179,24 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		end
 	end
 
+	-- ==============================================================================
+	-- SMOOTH VEHICLE INTERPOLATION (ANTI-RUBBERBANDING & ANTI-PULLBACK)
+	-- ==============================================================================
 	local function DriveCarNaturallyTo(car, targetPos, speed)
+		if isDrivingActive then return end
+		isDrivingActive = true
+
 		speed = speed or Config.TweenSpeed
 		local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
 		local seat = car:FindFirstChildWhichIsA("VehicleSeat", true)
-		if not primary then return end
+		if not primary then 
+			isDrivingActive = false 
+			return 
+		end
 
+		local hum = GetValidHumanoid()
 		local startCF = car:GetPivot()
+
 		local dirToAtm = (targetPos - startCF.Position).Unit
 		local flatDir = Vector3.new(dirToAtm.X, 0, dirToAtm.Z).Unit
 		local parkPos = targetPos - (flatDir * 14) + Vector3.new(0, 1.2, 0)
@@ -194,43 +206,42 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		local duration = math.max(Config.MinTravelDuration, dist / speed)
 
 		primary.Anchored = false
-		local startTime = os.clock()
-		print(string.format("🚗 [Safe Park] Menyetir ke titik parkir ATM (Jarak: %.0f stud | Durasi: %.1f dtk)...", dist, duration))
 
-		while (os.clock() - startTime) < duration and State.AutoDelivering do
-			local hum = GetValidHumanoid()
+		-- Nonaktifkan tabrakan body mobil agar tidak nyangkut saat melaju
+		for _, p in ipairs(car:GetDescendants()) do
+			if p:IsA("BasePart") and p.Name ~= "VehicleSeat" and p ~= primary then
+				p.CanCollide = false
+			end
+		end
+
+		local startTime = os.clock()
+		print(string.format("🚗 [Safe Drive] Meluncur ke target (Jarak: %.0f studs | Estimasi: %.1f dtk)...", dist, duration))
+
+		while State.AutoDelivering do
+			if _G.MainCoreSession ~= Context.Session then break end
+
+			local elapsed = os.clock() - startTime
+			local alpha = math.clamp(elapsed / duration, 0, 1)
+
+			-- Smoothstep interpolation (Halus dan natural)
+			local smoothAlpha = alpha * alpha * (3 - 2 * alpha)
+			local currentCF = startCF:Lerp(targetCF, smoothAlpha)
+
 			if hum and not hum.Sit and seat then
 				pcall(function() seat:Sit(hum) end)
 			end
 
-			local elapsed = os.clock() - startTime
-			local alpha = math.clamp(elapsed / duration, 0, 1)
-			local currentCF = startCF:Lerp(targetCF, alpha)
-			local currentSpeed = speed
-
-			if alpha > 0.85 then
-				local brakeFactor = (1 - alpha) / 0.15
-				currentSpeed = math.max(8, speed * brakeFactor)
-				if seat then pcall(function() seat.ThrottleFloat = 0; seat.Throttle = 0 end) end
-			else
-				if seat then pcall(function() seat.ThrottleFloat = 1; seat.Throttle = 1 end) end
-			end
-
+			-- Update CFrame dan matikan bentrokan fisika velocity
 			car:PivotTo(currentCF)
-			primary.AssemblyLinearVelocity = currentCF.LookVector * currentSpeed
+			primary.AssemblyLinearVelocity = Vector3.zero
 			primary.AssemblyAngularVelocity = Vector3.zero
+
+			if alpha >= 1 then break end
 			RunService.Heartbeat:Wait()
 		end
 
-		if seat then
-			pcall(function()
-				seat.ThrottleFloat = 0
-				seat.Throttle = 0
-				seat.SteerFloat = 0
-				seat.Steer = 0
-			end)
-		end
-
+		-- Stabilkan posisi saat tiba di tujuan
+		car:PivotTo(targetCF)
 		for _, p in ipairs(car:GetDescendants()) do
 			if p:IsA("BasePart") then
 				p.AssemblyLinearVelocity = Vector3.zero
@@ -238,17 +249,18 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			end
 		end
 
-		task.wait(0.15)
+		task.wait(0.2)
 		primary.Anchored = true
 		task.wait(Config.ActionDelay)
+
+		isDrivingActive = false
 	end
 
 	-- ==============================================================================
-	-- POCKET SALDO FETCHER DENGAN KALKULASI EARNED & GAJI TERAKHIR
+	-- POCKET SALDO FETCHER (EVENT-DRIVEN FINANCIAL ANALYTICS)
 	-- ==============================================================================
 	local function FetchPocketSaldo()
 		task.spawn(function()
-			-- 1. Trigger Remote Buka App MyBCA
 			local netContainer = ReplicatedStorage:FindFirstChild("NetworkContainer")
 			local remoteEvents = netContainer and netContainer:FindFirstChild("RemoteEvents")
 			local appOpened = remoteEvents and remoteEvents:FindFirstChild("MyBcaAppOpened")
@@ -259,7 +271,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 			task.wait(0.4)
 
-			-- 2. Ambil nilai Saldo Text dari ACTUAL NEW PHONE
 			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
 			if not pGui then return end
 
@@ -297,12 +308,10 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				local parsedNum = ParseRupiahToNumber(rawText)
 
 				if parsedNum > 0 then
-					-- Saldo Awal (Pertama kali membaca)
 					if not State.StartSaldo then
 						State.StartSaldo = parsedNum
 						State.StartSaldoText = FormatRupiah(parsedNum)
 					else
-						-- Hitung gaji yang baru masuk jika saldo bertambah
 						if parsedNum > State.CurrentSaldo and State.CurrentSaldo > 0 then
 							State.LastGaji = parsedNum - State.CurrentSaldo
 							State.LastGajiText = "+" .. FormatRupiah(State.LastGaji)
@@ -312,13 +321,11 @@ function BCA.Init(Window, Utils, Context, UICreate)
 					State.CurrentSaldo = parsedNum
 					State.CurrentSaldoText = FormatRupiah(parsedNum)
 
-					-- Hitung Total Profit / Earned
 					if State.StartSaldo then
 						State.EarnedSaldo = math.max(0, State.CurrentSaldo - State.StartSaldo)
 						State.EarnedText = "+" .. FormatRupiah(State.EarnedSaldo)
 					end
 
-					-- Update ke Floating Dashboard
 					if FloatingDash then
 						FloatingDash.UpdateSaldoAwal(State.StartSaldoText)
 						FloatingDash.UpdateCurrentSaldo(State.CurrentSaldoText)
@@ -328,10 +335,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				end
 			end
 
-			-- 3. Sembunyikan GUI HP
-			pcall(function()
-				phoneGui.Enabled = false
-			end)
+			pcall(function() phoneGui.Enabled = false end)
 		end)
 	end
 
@@ -344,7 +348,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			if Context.Session ~= _G.MainCoreSession then return end
 		end
 
-		-- Panggil 1x saat pertama kali modul siap
 		FetchPocketSaldo()
 
 		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
@@ -446,7 +449,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				State.TotalTrips = State.TotalTrips + 1
 				if FloatingDash then FloatingDash.UpdateTrips(State.TotalTrips) end
 
-				-- Update saldo & hitung gaji
 				FetchPocketSaldo()
 			end
 		end)
@@ -544,7 +546,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		State.DeliveryActive = true
 
 		task.spawn(function()
-			print("🏧 [Step 4] Memulai pengantaran ATM...")
+			print("🏧 [Step 4] Memulai siklus pengantaran koper ke ATM...")
 			while State.AutoDelivering do
 				if _G.MainCoreSession ~= Context.Session then break end
 				if (State.Loaded <= 0 and not State.Carrying) or (State.Phase == "Returning" and State.Loaded <= 0) then
@@ -556,34 +558,47 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
 				local ambilPrompt = GetAmbilPrompt(bagasiPoint)
 
-				if car and not State.IsBusy then
+				if car and not State.IsBusy and not isDrivingActive then
 					local hum, hrp = GetValidHumanoid()
 					local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
+					-- 1. FASE MENYETIR KE ATM
 					if not State.Carrying and State.TargetPos and distToAtm > 25 then
 						State.IsBusy = true
 						EnterDriverSeat(car)
 						task.wait(Config.ActionDelay)
-						if not State.AutoDelivering then State.IsBusy = false break end
+
+						if not State.AutoDelivering then 
+							State.IsBusy = false 
+							break 
+						end
+
 						DriveCarNaturallyTo(car, State.TargetPos, Config.TweenSpeed)
 						ExitDriverSeat(car)
+						task.wait(0.4)
 						State.IsBusy = false
 					end
 
 					if not State.AutoDelivering then break end
 
-					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 40 then
+					-- 2. FASE AMBIL KOPER DARI BAGASI
+					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 45 then
 						State.IsBusy = true
 						Utils.SafeTeleportChar(bagasiPoint.CFrame * CFrame.new(0, 0, 1.8), Config.ActionDelay)
 						task.wait(0.2)
 						Utils.TriggerPrompt(ambilPrompt, bagasiPoint, true)
+
 						local waitCarry = os.clock()
-						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < Config.ActionDelay * 12) do task.wait(Config.LoopWait / 2) end
+						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < Config.ActionDelay * 12) do 
+							task.wait(Config.LoopWait / 2) 
+						end
 						State.IsBusy = false
+						task.wait(Config.ActionDelay)
 					end
 
 					if not State.AutoDelivering then break end
 
+					-- 3. FASE ISI KOPER KE ATM
 					if State.Carrying and State.TargetPos then
 						State.IsBusy = true
 						Utils.SafeTeleportChar(CFrame.new(State.TargetPos + Vector3.new(0, 0, 1.5)), Config.ActionDelay)
@@ -593,8 +608,11 @@ function BCA.Init(Window, Utils, Context, UICreate)
 						if curHrp then curHrp.Anchored = true end
 
 						if Network then Network:FireServer("BankCourier", "FillStart") end
+
 						local waitFill = os.clock()
-						while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 25) do task.wait(Config.LoopWait / 2) end
+						while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 25) do 
+							task.wait(Config.LoopWait / 2) 
+						end
 
 						if curHrp then curHrp.Anchored = false end
 						State.IsBusy = false
@@ -614,6 +632,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		State.LoadingActive = false
 		State.DeliveryActive = false
 		State.IsBusy = false
+		isDrivingActive = false
 		State.Phase = "Unemployee"
 		State.Loaded = 0
 		State.Total = 0
@@ -792,9 +811,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 							task.wait(Config.LoopWait / 2)
 						end
 
-						-- Fetch update saldo & earned setelah klaim gaji
 						FetchPocketSaldo()
-
 						task.wait(Config.RestartDelay)
 					end
 
