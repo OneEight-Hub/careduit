@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (FRAME-ACCURATE & ZERO MEMORY LEAK)
+-- CDID HUB - BCA COURIER (EXACT PROMPT TARGETING & FIXED HOLD PROMPT)
 -- ==============================================================================
 local BCA = {}
 
@@ -141,6 +141,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		task.wait(Config.ActionDelay)
 	end
 
+	-- PROMPT TRIGGER STANDAR (INSTAN / SINGKAT)
 	local function TriggerPrompt(prompt)
 		if not prompt or not prompt:IsA("ProximityPrompt") then return end
 		prompt.RequiresLineOfSight = false
@@ -154,6 +155,27 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 			prompt:InputHoldBegin()
 			task.wait(duration + 0.1)
 			prompt:InputHoldEnd()
+		end
+	end
+
+	-- PROMPT TRIGGER KHUSUS TAHAN (AMBIL KOPER DI BAGASI)
+	local function TriggerHoldPromptDirect(prompt)
+		if not prompt or not prompt:IsA("ProximityPrompt") then return end
+		prompt.RequiresLineOfSight = false
+		prompt.MaxActivationDistance = 45
+		prompt.Enabled = true
+
+		local holdDuration = prompt.HoldDuration
+		if not holdDuration or holdDuration <= 0 then
+			holdDuration = 0.8
+		end
+
+		prompt:InputHoldBegin()
+		task.wait(holdDuration + 0.15)
+		prompt:InputHoldEnd()
+
+		if fireproximityprompt then
+			pcall(fireproximityprompt, prompt)
 		end
 	end
 
@@ -184,31 +206,18 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		return nil
 	end
 
+	-- DIRECT INSTANCE LOOKUP DENGAN FALLBACK
 	local function GetMuatPrompt(bagasiPoint)
 		if not bagasiPoint then return nil end
-		for _, p in ipairs(bagasiPoint:GetDescendants()) do
-			if p:IsA("ProximityPrompt") then
-				local act = (p.ActionText or ""):lower()
-				local name = p.Name:lower()
-				if act:find("muat") or name:find("muat") or act:find("load") or name:find("load") then
-					return p
-				end
-			end
-		end
+		local p = bagasiPoint:FindFirstChild("MuatPrompt")
+		if p and p:IsA("ProximityPrompt") then return p end
 		return bagasiPoint:FindFirstChildWhichIsA("ProximityPrompt", true)
 	end
 
 	local function GetAmbilPrompt(bagasiPoint)
 		if not bagasiPoint then return nil end
-		for _, p in ipairs(bagasiPoint:GetDescendants()) do
-			if p:IsA("ProximityPrompt") then
-				local act = (p.ActionText or ""):lower()
-				local name = p.Name:lower()
-				if act:find("ambil") or name:find("ambil") or act:find("take") or name:find("unload") then
-					return p
-				end
-			end
-		end
+		local p = bagasiPoint:FindFirstChild("AmbilPrompt")
+		if p and p:IsA("ProximityPrompt") then return p end
 		return bagasiPoint:FindFirstChildWhichIsA("ProximityPrompt", true)
 	end
 
@@ -372,7 +381,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				local thisToken = CurrentLoadToken
 				IsMinigameActive = true
 
-				-- Bersihkan connection loop ronde sebelumnya
 				if ActiveLoadConnection then
 					ActiveLoadConnection:Disconnect()
 					ActiveLoadConnection = nil
@@ -383,7 +391,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				local greenStart = arg1.greenStart or 0.4
 				local greenSize = arg1.greenSize or 0.2
 
-				-- Rentang target ideal (45% - 75% kotak hijau)
 				local minTarget = greenStart + (greenSize * 0.45)
 				local maxTarget = greenStart + (greenSize * 0.75)
 
@@ -393,7 +400,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 						return
 					end
 
-					-- Rumus asli pembacaan posisi bar CDID
 					local progress = (os.clock() - t0) / period % 2
 					local currentPos = progress <= 1 and progress or (2 - progress)
 
@@ -537,7 +543,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
 				local koperPrompt = KoperSpawn:FindFirstChildWhichIsA("ProximityPrompt", true)
 
-				-- 1. Ambil koper dari rak (Sekali Trigger)
+				-- 1. Ambil koper dari rak
 				if not State.Carrying and not State.IsBusy then
 					State.IsBusy = true
 					SafeTeleportInFront(KoperSpawn:GetPivot(), 2.8)
@@ -549,7 +555,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					end
 					State.IsBusy = false
 
-				-- 2. Muat koper ke bagasi (Sekali Trigger, Tunggu Minigame)
+				-- 2. Muat koper ke bagasi
 				elseif State.Carrying and not State.IsBusy then
 					if bagasiPoint then
 						State.IsBusy = true
@@ -641,19 +647,21 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 							task.wait(0.2)
 						end
 
+						-- Berdiri di belakang bagasi mobil
 						if curHrp then
 							RestoreCharacterPhysics()
-							curHrp.CFrame = CFrame.new(bagasiPoint.Position + Vector3.new(0, 1.0, 0))
+							local backOffset = bagasiPoint.CFrame.LookVector * -2.5
+							curHrp.CFrame = CFrame.new(bagasiPoint.Position + backOffset + Vector3.new(0, 0.5, 0), bagasiPoint.Position)
 						end
 						task.wait(0.2)
 
 						local ambilPrompt = GetAmbilPrompt(bagasiPoint)
-						if ambilPrompt then
-							TriggerPrompt(ambilPrompt)
-						end
-
 						local waitCarry = os.clock()
-						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < 3.5) do 
+						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < 6.0) do 
+							ambilPrompt = GetAmbilPrompt(bagasiPoint)
+							if ambilPrompt and not State.Carrying then
+								TriggerHoldPromptDirect(ambilPrompt)
+							end
 							task.wait(0.2) 
 						end
 						State.IsBusy = false
