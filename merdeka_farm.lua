@@ -1,22 +1,19 @@
 -- ==============================================================================
--- CDID HUB - AUTO FARM MERDEKA RACE EVENT (POWERED BY DRIVE ENGINE)
+-- CDID HUB - AUTO FARM MERDEKA RACE EVENT (INSTANT TELEPORT SYNC MODE)
 -- ==============================================================================
 local MerdekaFarm = {}
 
 function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 	local Players = game:GetService("Players")
 	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local Workspace = game:GetService("Workspace")
 	local LocalPlayer = Players.LocalPlayer
 
 	-- CONFIGURABLE VALUES
 	local Config = {
-		DriveSpeed = 190,
-		ReturnSpeedMultiplier = 3, -- Pengali 3x saat membawa bendera
-		MinTravelDuration = 8,
-		MinReturnDuration = 3,
-		FreezeCamera = true,
-		LoopWait = 0.5,
-		DefaultLobbyName = "CDID_AutoMerdeka"
+		TeleportDelay = 0.35, -- Jeda kestabilan fisika setelah teleport (detik)
+		LoopWait = 0.25,
+		DefaultLobbyName = "CDID_InstantMerdeka"
 	}
 
 	-- STATE & STATS
@@ -56,6 +53,62 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 		if type(val) ~= "number" then return tostring(val or 0) end
 		local r = string.format("%d", math.floor(val)):reverse():gsub("%d%d%d", "%1."):reverse():gsub("^%.", "")
 		return r
+	end
+
+	local function GetValidHumanoid()
+		local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			return hum, char:FindFirstChild("HumanoidRootPart")
+		end
+		return nil, nil
+	end
+
+	local function GetPlayerCar()
+		if DriveEngine and DriveEngine.GetPlayerCar then
+			local c = DriveEngine.GetPlayerCar()
+			if c then return c end
+		end
+		local vehicles = Workspace:FindFirstChild("Vehicles")
+		if not vehicles then return nil end
+		for _, v in ipairs(vehicles:GetChildren()) do
+			if v.Name:find(LocalPlayer.Name, 1, true) then
+				return v
+			end
+		end
+		return nil
+	end
+
+	-- EKSEKUTOR INSTANT TELEPORT MOBIL + DRIVER SEAT SYNC
+	local function InstantTeleportCarWithPlayer(targetPos)
+		if not targetPos then return end
+		local car = GetPlayerCar()
+		local hum, hrp = GetValidHumanoid()
+		if not hum or not hrp then return end
+
+		local driveSeat = car and (car:FindFirstChildWhichIsA("VehicleSeat", true) or car:FindFirstChild("DriveSeat", true))
+
+		-- 1. Pindahkan Mobil jika ada
+		if car and car.PrimaryPart then
+			car.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+			car.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+			
+			local targetCF = CFrame.new(targetPos + Vector3.new(0, 2.5, 0))
+			car:SetPrimaryPartCFrame(targetCF)
+		end
+
+		-- 2. Sinkronkan Karakter Duduk di Kursi
+		if driveSeat then
+			hrp.CFrame = driveSeat.CFrame + Vector3.new(0, 1.0, 0)
+			if not hum.Sit then
+				driveSeat:Sit(hum)
+			end
+		else
+			-- Fallback jika mobil belum spawn / tanpa vehicle seat
+			hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 1.5, 0))
+		end
+
+		task.wait(Config.TeleportDelay)
 	end
 
 	-- ==============================================================================
@@ -105,7 +158,6 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 		end)
 	end
 
-	-- Buka GUI Shop CDID dari mana saja
 	local function OpenMerdekaShopDirect()
 		task.spawn(function()
 			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
@@ -137,11 +189,8 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 						if FloatingDash then
 							FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
 						end
-						print("🛒 [Merdeka Shop] Shop dibuka! Poin:", State.MerdekaPoints)
 					end
 				end
-			else
-				warn("⚠️ [Merdeka Shop] MerdekaShopModule belum siap di PlayerGui!")
 			end
 		end)
 	end
@@ -187,13 +236,13 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 			-- Auto Ready
 			if State.AutoFarmActive and not isReady and State.SelectedCar ~= "None" then
-				task.wait(0.5)
+				task.wait(0.3)
 				if ToggleReadyRemote then ToggleReadyRemote:FireServer() end
 			end
 
 			-- Auto Start Race jika Host
 			if State.AutoFarmActive and State.IsHost and allReady and (lobbyData.playerCount >= (lobbyData.minPlayers or 1)) then
-				task.wait(1.5)
+				task.wait(1.0)
 				if StartRaceRemote then StartRaceRemote:FireServer() end
 			end
 		end)
@@ -231,13 +280,13 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 					State.FlagName = payload.FlagName or "Flag"
 					State.TotalFlags = payload.Total or 0
 					State.CurrentTargetPos = payload.FlagPos
-					print(string.format("🚩 [MerdekaHUD] Race Mulai! Target Bendera: %s", tostring(State.FlagName)))
+					print(string.format("🚩 [MerdekaHUD] Race Mulai! Menuju Bendera: %s", tostring(State.FlagName)))
 
 				elseif action == "Picked" then
 					State.IsCarryingFlag = true
 					State.BasePos = payload.BasePos
 					State.CurrentTargetPos = payload.BasePos
-					print("📦 [MerdekaHUD] Bendera diambil! Boost 3X Speed menuju Base...")
+					print("📦 [MerdekaHUD] Bendera terambil! Teleport balik ke Base...")
 
 				elseif action == "Planted" then
 					State.IsCarryingFlag = false
@@ -278,36 +327,20 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 	end
 
 	-- ==============================================================================
-	-- CORE AUTOFARM LOOP (MENGGUNAKAN UNIVERSAL DRIVE ENGINE)
+	-- CORE INSTANT AUTOFARM LOOP
 	-- ==============================================================================
 	local function StartAutoFarmLoop()
 		task.spawn(function()
-			print("🚀 [Merdeka Farm] Loop Auto Farm Dimulai...")
+			print("🚀 [Merdeka Farm] Loop Instant Teleport Dimulai...")
 			FetchMerdekaShopData()
 
 			while State.AutoFarmActive do
 				if _G.MainCoreSession ~= Context.Session then break end
 
-				-- A. JIKA SEDANG BALAPAN: GERAKKAN MOBIL VIA DRIVE ENGINE
+				-- A. SAAT SEDANG BALAPAN: INSTANT TELEPORT MOBIL KE TARGET
 				if State.IsRacing then
-					if State.CurrentTargetPos and DriveEngine and not DriveEngine.IsDriving() then
-						local targetSpeed = Config.DriveSpeed
-						local minDur = Config.MinTravelDuration
-
-						-- Boost 3X Speed jika sedang membawa bendera kembali ke base
-						if State.IsCarryingFlag then
-							targetSpeed = Config.DriveSpeed * Config.ReturnSpeedMultiplier
-							minDur = Config.MinReturnDuration
-						end
-
-						DriveEngine.DriveTo(State.CurrentTargetPos, {
-							Speed = targetSpeed,
-							MinDuration = minDur,
-							FreezeCam = Config.FreezeCamera,
-							StopCondition = function()
-								return not State.AutoFarmActive or not State.IsRacing or (_G.MainCoreSession ~= Context.Session)
-							end
-						})
+					if State.CurrentTargetPos then
+						InstantTeleportCarWithPlayer(State.CurrentTargetPos)
 					end
 					task.wait(Config.LoopWait)
 					continue
@@ -330,27 +363,27 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 					end
 
 					if targetLobbyId and JoinLobbyRemote then
-						print("🚪 [Merdeka Farm] Bergabung ke lobi publik ID:", targetLobbyId)
+						print("🚪 [Merdeka Farm] Bergabung ke lobi ID:", targetLobbyId)
 						JoinLobbyRemote:FireServer(targetLobbyId)
-						task.wait(1.0)
+						task.wait(0.8)
 					elseif CreateLobbyRemote then
 						print("✨ [Merdeka Farm] Membuat lobi Merdeka baru...")
 						CreateLobbyRemote:FireServer(Config.DefaultLobbyName, "merdeka")
 						State.IsHost = true
-						task.wait(1.0)
+						task.wait(0.8)
 					end
 
 					-- Pilih mobil
 					if State.SelectedCar ~= "None" and SelectCarRemote then
-						task.wait(0.5)
+						task.wait(0.3)
 						SelectCarRemote:FireServer(State.SelectedCar)
 					end
 				end
 
-				-- C. JIKA DI DALAM LOBI: KUNCI STATUS READY
+				-- C. JIKA DI DALAM LOBI: KUNCI READY
 				if State.InLobby and ToggleReadyRemote and not State.IsRacing then
 					ToggleReadyRemote:FireServer()
-					task.wait(1.0)
+					task.wait(0.8)
 				end
 
 				task.wait(Config.LoopWait)
@@ -362,7 +395,6 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 			end
 			State.InLobby = false
 			State.IsRacing = false
-			if DriveEngine then DriveEngine.FreezeCamera(false) end
 		end)
 	end
 
@@ -376,8 +408,8 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 	local ControlsSection = MerdekaTab:Section({ Title = "Kontrol Auto Farm Merdeka" })
 	local CarSection      = MerdekaTab:Section({ Title = "Pilihan Mobil Balap" })
-	local SettingsSection = MerdekaTab:Section({ Title = "Konfigurasi Drive Engine" })
 	local StatusSection   = MerdekaTab:Section({ Title = "Live Monitor & Shop Points" })
+	local SettingsSection = MerdekaTab:Section({ Title = "Pengaturan Delay" })
 
 	StatusSection:Button({
 		Title = "Toggle Floating Monitor (Merdeka Points)",
@@ -432,15 +464,15 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 	-- TOGGLE AUTO FARM
 	autoFarmToggle = ControlsSection:Toggle({
-		Title = "Auto Farm Merdeka Race (Safe Drive)",
-		Desc = "Auto Matchmaking -> Drive Ambil Bendera -> 3X Speed Return Base -> Loop.",
+		Title = "Auto Farm Merdeka Race (Instant Teleport)",
+		Desc = "Auto Matchmaking -> Instant TP Mobil & Driver Seat -> Fast Flag Loop.",
 		Value = false,
 		Callback = function(active)
 			if State.AutoFarmActive == active then return end
 			State.AutoFarmActive = active
 
 			if active then
-				print("🚀 [Merdeka Farm] Mengaktifkan Auto Farm...")
+				print("🚀 [Merdeka Farm] Mengaktifkan Instant Auto Farm...")
 				if Utils.DestroyHeavyMaps then
 					Utils.DestroyHeavyMaps()
 				elseif Utils.StartGiantPlatform then
@@ -468,7 +500,6 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 		while task.wait(0.5) do
 			if _G.MainCoreSession ~= Context.Session then break end
 
-			-- Polling poin ke server setiap ~10 detik
 			pollCounter = pollCounter + 1
 			if pollCounter >= 20 then
 				pollCounter = 0
@@ -478,9 +509,9 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 			local stateText = "Idle"
 			if State.IsRacing then
 				if State.IsCarryingFlag then
-					stateText = "⚡ Mengantar Bendera ke Base (3X Speed)"
+					stateText = "⚡ Instant TP ke Base (Planted)"
 				else
-					stateText = "Meluncur ke Titik Bendera 🚩"
+					stateText = "⚡ Instant TP ke Bendera 🚩"
 				end
 			elseif State.InLobby then
 				stateText = "Di Lobi (Menunggu Ready/Start) ⏳"
@@ -498,42 +529,12 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 		end
 	end)
 
-	SettingsSection:Toggle({
-		Title = "Freeze Camera Saat Melaju (FPS Boost)",
-		Desc = "Mengunci kamera saat mobil bergerak untuk menurunkan beban render GPU.",
-		Value = Config.FreezeCamera,
-		Callback = function(val)
-			Config.FreezeCamera = val
-		end
-	})
-
-	SettingsSection:Input({
-		Title = "Kecepatan Base (Ambil Bendera)",
-		Value = tostring(Config.DriveSpeed),
-		Callback = function(val)
-			local num = tonumber(val)
-			if num then Config.DriveSpeed = num end
-		end
-	})
-
 	SettingsSection:Slider({
-		Title = "Pengali Kecepatan Return (Multiplier)",
-		Value = { Min = 1, Max = 5, Default = 3 },
+		Title = "Jeda Stabilitas Teleport (Detik)",
+		Value = { Min = 1, Max = 10, Default = 4 },
 		Callback = function(val)
-			Config.ReturnSpeedMultiplier = val
+			Config.TeleportDelay = val / 10
 		end
-	})
-
-	SettingsSection:Slider({
-		Title = "Durasi Minimum Ambil Bendera",
-		Value = { Min = 5, Max = 30, Default = 8 },
-		Callback = function(val) Config.MinTravelDuration = val end
-	})
-
-	SettingsSection:Slider({
-		Title = "Durasi Minimum Return ke Base",
-		Value = { Min = 1, Max = 10, Default = 3 },
-		Callback = function(val) Config.MinReturnDuration = val end
 	})
 end
 
