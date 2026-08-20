@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - DYNAMIC SERVER & MAP MANAGER
+-- CDID HUB - DYNAMIC SERVER & PRIVATE SERVER MANAGER
 -- ==============================================================================
 local ServerManager = {}
 
@@ -10,23 +10,29 @@ function ServerManager.Init(Window, Utils, Context)
 	local Players = game:GetService("Players")
 	local LocalPlayer = Players.LocalPlayer
 
-	-- 1. LOAD MODUL TELEPORT BAWAAN CDID SECARA DINAMIS
+	-- 1. LOAD MODUL TELEPORT & NETWORK BAWAAN CDID
 	local CDID_TeleportModule = nil
-	local SharedFolder = ReplicatedStorage:WaitForChild("Shared", 5)
-	local TeleportScript = SharedFolder and SharedFolder:WaitForChild("Teleport", 5)
+	local CDID_Network = nil
 
-	if TeleportScript then
-		local ok, mod = pcall(require, TeleportScript)
-		if ok and mod then
-			CDID_TeleportModule = mod
-			print("✅ [Server Manager] Berhasil me-load ReplicatedStorage.Shared.Teleport")
+	local SharedFolder = ReplicatedStorage:WaitForChild("Shared", 5)
+	if SharedFolder then
+		local TeleportScript = SharedFolder:WaitForChild("Teleport", 5)
+		if TeleportScript then
+			local ok, mod = pcall(require, TeleportScript)
+			if ok and mod then CDID_TeleportModule = mod end
+		end
+
+		local NetworkScript = SharedFolder:WaitForChild("Network", 5)
+		if NetworkScript then
+			local ok, net = pcall(require, NetworkScript)
+			if ok and net then CDID_Network = net end
 		end
 	end
 
-	-- 2. AMBIL LIST MAP RESMI DARI MODUL GAME (DENGAN FALLBACK)
-	local MapDictionary = {}      -- { ["JAKARTA"] = { PlaceId = ..., Key = "Jakarta" } }
-	local MapNamesDisplay = {}    -- { "BALI", "BANDUNG", "JAKARTA", ... }
-	local defaultSelected = ""
+	-- 2. PARSE LIST MAP SECARA DINAMIS
+	local MapDictionary = {}   -- { ["JAKARTA"] = { PlaceId = ..., Key = "Jakarta" } }
+	local MapNamesDisplay = {} -- { "BALI", "BANDUNG", "JAKARTA", ... }
+	local defaultSelected = "JAKARTA"
 
 	local function RefreshMapData()
 		MapDictionary = {}
@@ -39,7 +45,6 @@ function ServerManager.Init(Window, Utils, Context)
 			end)
 		end
 
-		-- Jika modul CDID berhasil dibaca
 		if rawList and type(rawList) == "table" then
 			for mapKey, mapInfo in pairs(rawList) do
 				local displayName = mapInfo.Name or mapKey:upper()
@@ -51,8 +56,7 @@ function ServerManager.Init(Window, Utils, Context)
 				table.insert(MapNamesDisplay, displayName)
 			end
 		else
-			-- Fallback hardcoded jika modul gagal di-require
-			warn("⚠️ [Server Manager] Gagal require Teleport module, menggunakan data fallback.")
+			-- Fallback hardcoded
 			local fallbackMaps = {
 				["JAKARTA"]     = { Key = "Jakarta", PlaceId = 14005966837 },
 				["BANDUNG"]     = { Key = "Bandung", PlaceId = 79488788685813 },
@@ -75,6 +79,7 @@ function ServerManager.Init(Window, Utils, Context)
 	RefreshMapData()
 
 	local currentSelectedName = defaultSelected
+	local inputPrivateCode = ""
 
 	-- ==============================================================================
 	-- UI WINDUI TAB SETUP
@@ -84,35 +89,31 @@ function ServerManager.Init(Window, Utils, Context)
 		Icon = "solar:server-square-bold"
 	})
 
-	local MapSection = ServerTab:Section({ Title = "Pilihan & Pindah Map CDID (Dynamic)" })
-	local ServerSection = ServerTab:Section({ Title = "Kontrol Server" })
+	local PublicMapSection = ServerTab:Section({ Title = "Public Map Selector (Dynamic)" })
+	local PrivateServerSection = ServerTab:Section({ Title = "Private Server System" })
+	local ServerControlSection = ServerTab:Section({ Title = "Kontrol Server Umum" })
 
-	-- DROPDOWN DINAMIS (Mengambil dari ReplicatedStorage.Shared.Teleport)
-	local mapDropdown = MapSection:Dropdown({
+	-- ==========================================
+	-- A. PUBLIC MAP SELECTOR
+	-- ==========================================
+	local mapDropdown = PublicMapSection:Dropdown({
 		Title = "Pilih Map Tujuan",
-		Desc = "Daftar map disinkronkan otomatis langsung dari data CDID.",
+		Desc = "Daftar map tersinkronisasi langsung dari modul resmi game.",
 		Values = MapNamesDisplay,
 		Value = currentSelectedName,
 		Callback = function(chosen)
 			currentSelectedName = chosen
-			local info = MapDictionary[chosen]
-			if info then
-				print(string.format("🗺️ [Map Manager] Map: %s | Key: %s | PlaceId: %s", chosen, tostring(info.Key), tostring(info.PlaceId)))
-			end
 		end
 	})
 
-	-- TOMBOL PINDAH MAP RESMI
-	MapSection:Button({
-		Title = "Pindah ke Map Terpilih",
-		Desc = "Teleport menggunakan alur resmi bawaan game CDID.",
+	PublicMapSection:Button({
+		Title = "Pindah ke Public Map Terpilih",
+		Desc = "Teleport ke server publik map tersebut dengan loading screen resmi.",
 		Callback = function()
 			local targetInfo = MapDictionary[currentSelectedName]
 			if not targetInfo then return end
 
-			print("🚀 [Map Manager] Menghubungkan ke map:", currentSelectedName)
-
-			-- Opsi 1: Panggil fungsi asli game (Memunculkan layar loading custom CDID)
+			print("🚀 [Map Manager] Teleporting ke Public Map:", currentSelectedName)
 			if CDID_TeleportModule and CDID_TeleportModule.TeleporToPublicServer then
 				local pGui = LocalPlayer:FindFirstChild("PlayerGui")
 				local ok = pcall(function()
@@ -121,17 +122,15 @@ function ServerManager.Init(Window, Utils, Context)
 				if ok then return end
 			end
 
-			-- Opsi 2: Fallback Teleport Standar Roblox jika metode in-game gagal
 			pcall(function()
 				TeleportService:Teleport(targetInfo.PlaceId, LocalPlayer)
 			end)
 		end
 	})
 
-	-- TOMBOL REFRESH LIST MAP
-	MapSection:Button({
+	PublicMapSection:Button({
 		Title = "Refresh Daftar Map",
-		Desc = "Muat ulang daftar map dari game tanpa inject ulang script.",
+		Desc = "Muat ulang daftar map dari game.",
 		Callback = function()
 			RefreshMapData()
 			if mapDropdown and mapDropdown.SetValues then
@@ -141,8 +140,56 @@ function ServerManager.Init(Window, Utils, Context)
 		end
 	})
 
-	-- REJOIN SERVER
-	ServerSection:Button({
+	-- ==========================================
+	-- B. PRIVATE SERVER SYSTEM
+	-- ==========================================
+	PrivateServerSection:Input({
+		Title = "Kode Private Server",
+		Placeholder = "Masukkan kode private server...",
+		Callback = function(val)
+			inputPrivateCode = tostring(val or ""):gsub("%s+", "")
+		end
+	})
+
+	PrivateServerSection:Button({
+		Title = "Join Private Server",
+		Desc = "Masuk ke server private berdasarkan kode dan map yang dipilih di dropdown atas.",
+		Callback = function()
+			if inputPrivateCode == "" then
+				warn("⚠️ [Private Server] Masukkan kode server terlebih dahulu!")
+				return
+			end
+
+			local targetInfo = MapDictionary[currentSelectedName]
+			local mapKey = targetInfo and targetInfo.Key or "Jakarta"
+
+			print(string.format("🔑 [Private Server] Mencoba Join Server Code: %s (Map: %s)...", inputPrivateCode, mapKey))
+
+			if CDID_Network then
+				CDID_Network:FireServer("PrivateServer", "Join", tostring(inputPrivateCode), mapKey)
+			else
+				warn("⚠️ [Private Server] Module Network tidak ditemukan!")
+			end
+		end
+	})
+
+	PrivateServerSection:Button({
+		Title = "Generate Kode Private Server Baru",
+		Desc = "Membuat kode server private baru milik akun kamu.",
+		Callback = function()
+			print("✨ [Private Server] Membuat Private Server baru...")
+			if CDID_Network then
+				CDID_Network:FireServer("PrivateServer", "Create")
+			else
+				warn("⚠️ [Private Server] Module Network tidak ditemukan!")
+			end
+		end
+	})
+
+	-- ==========================================
+	-- C. KONTROL SERVER UMUM
+	-- ==========================================
+	ServerControlSection:Button({
 		Title = "Rejoin Server Ini",
 		Desc = "Masuk kembali ke server saat ini.",
 		Callback = function()
@@ -152,8 +199,7 @@ function ServerManager.Init(Window, Utils, Context)
 		end
 	})
 
-	-- SERVER HOP
-	ServerSection:Button({
+	ServerControlSection:Button({
 		Title = "Server Hop (Cari Server Lain)",
 		Desc = "Mencari server publik lain yang masih memiliki slot kosong.",
 		Callback = function()
