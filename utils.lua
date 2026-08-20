@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - UTILITIES (SAFE SMART PLATFORM & CLEANER)
+-- CDID HUB - UTILITIES (SAFE SMART PLATFORM & CLEANER - FIXED NO ELEVATOR)
 -- ==============================================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -14,6 +14,7 @@ local LocalPlayer = Players.LocalPlayer
 local GiantPlatform = nil
 local PlatformConn = nil
 local RespawnConn = nil
+local CurrentBaseY = nil -- Kunci ketinggian agar tidak terjadi efek eskalator
 
 local function GetPlayerCar()
 	local vehicles = Workspace:FindFirstChild("Vehicles")
@@ -30,10 +31,10 @@ local function EnsurePlatformPart()
 	if not GiantPlatform or not GiantPlatform.Parent then
 		GiantPlatform = Instance.new("Part")
 		GiantPlatform.Name = "CDID_SmartPlatform"
-		GiantPlatform.Size = Vector3.new(500, 2, 500)
+		GiantPlatform.Size = Vector3.new(600, 2, 600)
 		GiantPlatform.Anchored = true
 		GiantPlatform.CanCollide = true
-		GiantPlatform.Transparency = 0 -- 1 untuk transparan total
+		GiantPlatform.Transparency = 1 -- Transparan penuh agar tidak mengganggu visual
 		GiantPlatform.Material = Enum.Material.SmoothPlastic
 		GiantPlatform.TopSurface = Enum.SurfaceType.Smooth
 		GiantPlatform.Parent = Workspace
@@ -42,50 +43,67 @@ local function EnsurePlatformPart()
 end
 
 -- ==============================================================================
--- 1. SMART DYNAMIC PLATFORM (500x500 AUTO-FOLLOW & ANTI-RESPAWN VOID)
+-- 1. SMART DYNAMIC PLATFORM (ANTI-ELEVATOR & STATIC BASE HEIGHT LOCK)
 -- ==============================================================================
 function Utils.StartGiantPlatform()
 	EnsurePlatformPart()
 
-	-- A. Proteksi Respawn (Snap seketika di bawah karakter baru)
+	-- Set Ketinggian Awal Lantai (Dikunci dari titik spawn)
+	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+	local initHrp = char:WaitForChild("HumanoidRootPart", 5)
+	if initHrp then
+		CurrentBaseY = initHrp.Position.Y - 3.5
+	else
+		CurrentBaseY = 0
+	end
+
+	-- A. Proteksi Respawn (Update ketinggian jika karakter respawn)
 	if RespawnConn then RespawnConn:Disconnect() end
 	RespawnConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
 		local hrp = newChar:WaitForChild("HumanoidRootPart", 10)
 		if hrp then
+			CurrentBaseY = hrp.Position.Y - 3.5
 			local plate = EnsurePlatformPart()
-			plate.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y - 3.2, hrp.Position.Z)
-			print("🔄 [Safe Platform] Karakter respawn -> Platform di-snap ke posisi spawn baru.")
+			plate.CFrame = CFrame.new(hrp.Position.X, CurrentBaseY, hrp.Position.Z)
+			print("🔄 [Safe Platform] Karakter respawn -> Base Y di-update.")
 		end
 	end)
 
-	-- B. Tracker Per-Frame (Smart Target: Mobil vs Player)
+	-- B. Tracker Heartbeat (Hanya ikuti X dan Z, Y dikunci agar tidak naik ke langit!)
 	if PlatformConn then PlatformConn:Disconnect() end
 	PlatformConn = RunService.Heartbeat:Connect(function()
 		local plate = EnsurePlatformPart()
 
-		local char = LocalPlayer.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local curChar = LocalPlayer.Character
+		local hum = curChar and curChar:FindFirstChildOfClass("Humanoid")
+		local hrp = curChar and curChar:FindFirstChild("HumanoidRootPart")
 		local car = GetPlayerCar()
 
 		if hum and hum.Health <= 0 then return end
 
-		-- Jika sedang naik mobil
+		-- 1. Jika sedang di dalam mobil
 		if hum and hum.Sit and car then
 			local carPrimary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
 			if carPrimary then
-				plate.CFrame = CFrame.new(carPrimary.Position.X, carPrimary.Position.Y - 2.8, carPrimary.Position.Z)
+				-- Ketinggian platform menyesuaikan mobil dengan aman
+				plate.CFrame = CFrame.new(carPrimary.Position.X, carPrimary.Position.Y - 3.0, carPrimary.Position.Z)
+				CurrentBaseY = carPrimary.Position.Y - 3.0
 				return
 			end
 		end
 
-		-- Jika jalan kaki / teleport
+		-- 2. Jika jalan kaki / berdiri (Gunakan X dan Z dari HRP, tapi Y tetap stabil!)
 		if hrp then
-			plate.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y - 3.2, hrp.Position.Z)
+			-- Jika player pindah area tinggi (misal lantai 2), update secara bertahap bukan per-frame micro
+			if math.abs((hrp.Position.Y - 3.5) - CurrentBaseY) > 8 then
+				CurrentBaseY = hrp.Position.Y - 3.5
+			end
+
+			plate.CFrame = CFrame.new(hrp.Position.X, CurrentBaseY, hrp.Position.Z)
 		end
 	end)
 
-	print("🛡️ [Safe Platform] Smart Platform 500x500 aktif.")
+	print("🛡️ [Safe Platform] Smart Platform Anti-Elevator aktif.")
 end
 
 function Utils.StopGiantPlatform()
@@ -101,6 +119,7 @@ function Utils.StopGiantPlatform()
 		GiantPlatform:Destroy()
 		GiantPlatform = nil
 	end
+	CurrentBaseY = nil
 	print("🛑 [Safe Platform] Smart Platform dinonaktifkan.")
 end
 
@@ -204,17 +223,14 @@ function Utils.TriggerPrompt(prompt, targetPart, isTrunk)
 		task.wait(0.1)
 	end
 
-	hrp.Anchored = true
-
 	if fireproximityprompt then
 		fireproximityprompt(prompt)
+	else
+		prompt:InputHoldBegin()
+		task.wait(prompt.HoldDuration + 0.1)
+		prompt:InputHoldEnd()
 	end
 
-	prompt:InputHoldBegin()
-	task.wait(prompt.HoldDuration + 0.1)
-	prompt:InputHoldEnd()
-
-	hrp.Anchored = false
 	return true
 end
 
