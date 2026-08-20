@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - UNIVERSAL SAFE DRIVE ENGINE
+-- CDID HUB - UNIVERSAL SAFE DRIVE ENGINE (AUTO-FIX READONLY & A-CHASSIS)
 -- ==============================================================================
 local DriveEngine = {}
 
@@ -9,7 +9,7 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
--- Global Defaults (Dapat diubah via config)
+-- Global Defaults
 DriveEngine.Defaults = {
 	Speed = 190,
 	MinDuration = 8,
@@ -20,7 +20,7 @@ DriveEngine.Defaults = {
 local isDrivingActive = false
 
 -- ==============================================================================
--- INTERNAL HELPERS
+-- INTERNAL HELPERS & A-CHASSIS BYPASS
 -- ==============================================================================
 local function GetValidHumanoid()
 	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -42,9 +42,27 @@ function DriveEngine.GetPlayerCar()
 	return nil
 end
 
+-- Mencegah error 'ReadOnly is not a valid member of Model' dari script Settings CDID
+function DriveEngine.FixCarReadOnly(car)
+	if not car then return end
+	if not car:FindFirstChild("ReadOnly") then
+		local ro = Instance.new("Folder")
+		ro.Name = "ReadOnly"
+		ro.Parent = car
+	end
+	if not car:FindFirstChild("A-Chassis Tune") then
+		local tune = Instance.new("ModuleScript")
+		tune.Name = "A-Chassis Tune"
+		tune.Parent = car
+	end
+end
+
 function DriveEngine.EnsureSeated(car)
 	local hum, hrp = GetValidHumanoid()
 	if not hum or not hrp or not car then return false end
+
+	-- Patch ReadOnly sebelum menduduki kursi
+	DriveEngine.FixCarReadOnly(car)
 
 	local seat = car:FindFirstChildWhichIsA("VehicleSeat", true) 
 		or car:FindFirstChild("DriveSeat", true) 
@@ -56,20 +74,19 @@ function DriveEngine.EnsureSeated(car)
 	local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
 	if primary then primary.Anchored = false end
 
-	hrp.CFrame = seat.CFrame * CFrame.new(0, 1.2, 1.2)
+	hrp.CFrame = seat.CFrame * CFrame.new(0, 1.2, 0)
 	task.wait(DriveEngine.Defaults.ActionDelay)
 
 	local drivePrompt = seat:FindFirstChild("PromptDriveSeat", true)
 		or seat:FindFirstChildWhichIsA("ProximityPrompt", true)
 		or car:FindFirstChild("PromptDriveSeat", true)
+		or car:FindFirstChildWhichIsA("ProximityPrompt", true)
 
 	if drivePrompt and drivePrompt.Enabled then
 		drivePrompt.RequiresLineOfSight = false
-		drivePrompt.MaxActivationDistance = 25
+		drivePrompt.MaxActivationDistance = 35
 		if fireproximityprompt then 
 			fireproximityprompt(drivePrompt) 
-		else
-			pcall(function() seat:Sit(hum) end)
 		end
 		drivePrompt:InputHoldBegin()
 		task.wait(drivePrompt.HoldDuration + 0.1)
@@ -79,7 +96,9 @@ function DriveEngine.EnsureSeated(car)
 	end
 
 	local timeout = os.clock()
-	while not hum.Sit and (os.clock() - timeout < 2.5) do task.wait(0.1) end
+	while not hum.Sit and (os.clock() - timeout < 2.5) do 
+		task.wait(0.1) 
+	end
 	return hum.Sit
 end
 
@@ -98,7 +117,6 @@ end
 -- ==============================================================================
 -- CORE DRIVE FUNCTION
 -- ==============================================================================
--- options: { Speed = 190, MinDuration = 8, StopCondition = function() return false end, FreezeCam = true }
 function DriveEngine.DriveTo(targetPos, options)
 	if isDrivingActive or not targetPos then return false end
 	isDrivingActive = true
@@ -135,7 +153,6 @@ function DriveEngine.DriveTo(targetPos, options)
 
 	primary.Anchored = false
 
-	-- Nonaktifkan part body mobil agar tidak nyangkut
 	for _, p in ipairs(car:GetDescendants()) do
 		if p:IsA("BasePart") and p.Name ~= "VehicleSeat" and p ~= primary then
 			p.CanCollide = false
@@ -149,13 +166,11 @@ function DriveEngine.DriveTo(targetPos, options)
 	local startTime = os.clock()
 
 	while true do
-		-- Hentikan paksa jika ada stop condition dari modul pemanggil
 		if stopCondition() then break end
 
 		local elapsed = os.clock() - startTime
 		local alpha = math.clamp(elapsed / duration, 0, 1)
 
-		-- Smoothstep Interpolation
 		local smoothAlpha = alpha * alpha * (3 - 2 * alpha)
 		local currentCF = startCF:Lerp(targetCF, smoothAlpha)
 
