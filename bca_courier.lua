@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (FULL STABLE, NO CRASH, GROUNDED PHYSIC & DEBUG TIMER)
+-- CDID HUB - BCA COURIER (FULL STABLE & FIXED LUGGAGE INTERACTION)
 -- ==============================================================================
 local BCA = {}
 
@@ -36,7 +36,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 		TotalTrips = 0,
 
-		-- Stopwatch Debugger
+		-- Stopwatch / Timer Debugger
 		TripStartTime = nil,
 		CurrentTripElapsed = 0,
 		LastTripDuration = 0,
@@ -100,7 +100,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		return nil, nil
 	end
 
-	-- Menstabilkan posisi & fisika karakter agar tidak melayang / terpental
+	-- Menstabilkan fisika karakter agar tidak melayang / terpental
 	local function RestoreCharacterPhysics()
 		local hum, hrp = GetValidHumanoid()
 		if hrp then
@@ -115,7 +115,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		end
 	end
 
-	-- Teleportasi presisi dengan jarak aman di depan target (bebas tabrakan part)
+	-- Teleportasi presisi dengan jarak aman di depan target
 	local function SafeTeleportInFront(targetCF, offsetDist)
 		offsetDist = offsetDist or 4.0
 		local hum, hrp = GetValidHumanoid()
@@ -129,10 +129,11 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		task.wait(Config.ActionDelay)
 	end
 
+	-- Eksekutor Proximity Prompt Langsung & Remote Trigger
 	local function TriggerPromptDirect(prompt)
 		if not prompt or not prompt:IsA("ProximityPrompt") then return end
 		prompt.RequiresLineOfSight = false
-		prompt.MaxActivationDistance = 30
+		prompt.MaxActivationDistance = 45
 		prompt.Enabled = true
 
 		if fireproximityprompt then
@@ -171,24 +172,34 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		return nil
 	end
 
-	local function GetMuatPrompt(bagasiPoint)
+	-- HELPER PROMPT BAGASI (FLEKSIBEL: SUPPORT 1 PROMPT / BANYAK PROMPT)
+	local function GetBagasiPrompt(bagasiPoint, mode) -- mode: "muat" atau "ambil"
 		if not bagasiPoint then return nil end
-		local prompt = bagasiPoint:FindFirstChild("MuatPrompt")
-		if prompt and prompt:IsA("ProximityPrompt") then return prompt end
-		for _, p in ipairs(bagasiPoint:GetChildren()) do
-			if p:IsA("ProximityPrompt") and p.Name ~= "AmbilPrompt" then return p end
-		end
-		return nil
-	end
 
-	local function GetAmbilPrompt(bagasiPoint)
-		if not bagasiPoint then return nil end
-		local prompt = bagasiPoint:FindFirstChild("AmbilPrompt")
-		if prompt and prompt:IsA("ProximityPrompt") then return prompt end
-		for _, p in ipairs(bagasiPoint:GetChildren()) do
-			if p:IsA("ProximityPrompt") and p.Name ~= "MuatPrompt" then return p end
+		-- 1. Cari berdasarkan nama langsung
+		if mode == "muat" then
+			local p = bagasiPoint:FindFirstChild("MuatPrompt") or bagasiPoint:FindFirstChild("LoadPrompt")
+			if p and p:IsA("ProximityPrompt") then return p end
+		elseif mode == "ambil" then
+			local p = bagasiPoint:FindFirstChild("AmbilPrompt") or bagasiPoint:FindFirstChild("UnloadPrompt")
+			if p and p:IsA("ProximityPrompt") then return p end
 		end
-		return nil
+
+		-- 2. Cari berdasarkan ActionText bawaan prompt
+		for _, p in ipairs(bagasiPoint:GetDescendants()) do
+			if p:IsA("ProximityPrompt") then
+				local act = (p.ActionText or ""):lower()
+				local name = p.Name:lower()
+				if mode == "muat" and (act:find("muat") or act:find("load") or name:find("muat") or name:find("load")) then
+					return p
+				elseif mode == "ambil" and (act:find("ambil") or act:find("unload") or act:find("take") or name:find("ambil") or name:find("unload")) then
+					return p
+				end
+			end
+		end
+
+		-- 3. Fallback: Ambil ProximityPrompt pertama yang ada di bagasi
+		return bagasiPoint:FindFirstChildWhichIsA("ProximityPrompt", true)
 	end
 
 	-- ==============================================================================
@@ -473,7 +484,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 				local car = GetPlayerCar()
 				local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
-				local muatPrompt = GetMuatPrompt(bagasiPoint)
+				local muatPrompt = GetBagasiPrompt(bagasiPoint, "muat")
 				local koperPrompt = KoperSpawn:FindFirstChildWhichIsA("ProximityPrompt", true)
 
 				if not State.Carrying and not State.IsBusy then
@@ -487,14 +498,27 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					end
 					State.IsBusy = false
 				elseif State.Carrying and not State.IsBusy then
-					if bagasiPoint and muatPrompt then
+					if bagasiPoint then
 						State.IsBusy = true
-						SafeTeleportInFront(bagasiPoint.CFrame, 1.8)
-						TriggerPromptDirect(muatPrompt)
+						
+						-- Berdiri tepat di depan bagasi
+						local hum, hrp = GetValidHumanoid()
+						if hrp then
+							hrp.CFrame = CFrame.new(bagasiPoint.Position + Vector3.new(0, 1.2, 0))
+						end
+						task.wait(0.2)
+
+						muatPrompt = GetBagasiPrompt(bagasiPoint, "muat")
+						if muatPrompt then
+							TriggerPromptDirect(muatPrompt)
+						end
 
 						local timeout = os.clock()
 						while State.Carrying and State.AutoLoading and (os.clock() - timeout < 2.5) do 
-							task.wait(0.1) 
+							if muatPrompt and State.Carrying then
+								TriggerPromptDirect(muatPrompt)
+							end
+							task.wait(0.15) 
 						end
 						State.IsBusy = false
 						task.wait(Config.ActionDelay)
@@ -515,7 +539,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		task.spawn(function()
 			print("🏧 [Step 4] Memulai siklus pengantaran koper ke ATM...")
 
-			-- Tunggu Target Koordinat ATM dari Server
+			-- Tunggu Target Posisi ATM dari Server
 			local waitTarget = os.clock()
 			while not State.TargetPos and State.AutoDelivering and (os.clock() - waitTarget < 5) do
 				task.wait(0.2)
@@ -532,7 +556,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 				local car = GetPlayerCar()
 				local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
-				local ambilPrompt = GetAmbilPrompt(bagasiPoint)
 
 				if car and not State.IsBusy then
 					local hum, hrp = GetValidHumanoid()
@@ -561,14 +584,33 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					if not State.AutoDelivering then break end
 
 					-- 2. FASE AMBIL KOPER DARI BAGASI
-					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 75 then
+					if not State.Carrying and bagasiPoint and distToAtm <= 85 then
 						State.IsBusy = true
-						SafeTeleportInFront(bagasiPoint.CFrame, 1.8)
-						TriggerPromptDirect(ambilPrompt)
+
+						-- Pastikan turun dari mobil
+						local curHum, curHrp = GetValidHumanoid()
+						if curHum and curHum.Sit then
+							curHum.Sit = false
+							task.wait(0.2)
+						end
+
+						if curHrp then
+							RestoreCharacterPhysics()
+							curHrp.CFrame = CFrame.new(bagasiPoint.Position + Vector3.new(0, 1.2, 0))
+						end
+						task.wait(0.2)
+
+						local ambilPrompt = GetBagasiPrompt(bagasiPoint, "ambil")
+						if ambilPrompt then
+							TriggerPromptDirect(ambilPrompt)
+						end
 
 						local waitCarry = os.clock()
-						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < 2.5) do 
-							task.wait(0.1) 
+						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < 3.0) do 
+							if ambilPrompt and not State.Carrying then
+								TriggerPromptDirect(ambilPrompt)
+							end
+							task.wait(0.2) 
 						end
 						State.IsBusy = false
 						task.wait(Config.ActionDelay)
@@ -576,7 +618,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 					if not State.AutoDelivering then break end
 
-					-- 3. FASE ISI KOPER KE ATM (MURNI REMOTE EVENT TANPA TELEPORTASI KE MESIN)
+					-- 3. FASE ISI KOPER KE ATM VIA REMOTE EVENT
 					if State.Carrying then
 						State.IsBusy = true
 						task.wait(0.2)
