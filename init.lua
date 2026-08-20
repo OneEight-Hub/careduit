@@ -19,12 +19,14 @@ local Context = {
 	Hooks = _G.MainCoreHooks
 }
 
--- Load Utils & UICreate
+-- 1. Load Utils, UICreate & Core Drive Engine
 local Utils = _G.CDID_LoadModule("utils.lua")
 local UICreate = _G.CDID_LoadModule("uicreate.lua")
+local DriveEngine = _G.CDID_LoadModule("drive_engine.lua") -- Load Core Drive Engine
+
 Utils.SetupAntiAFK()
 
--- Init WindUI
+-- 2. Init WindUI
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -87,12 +89,12 @@ end)
 local ServerModule = _G.CDID_LoadModule("server_manager.lua")
 ServerModule.Init(Window, Utils, Context)
 
--- 2. BCA Courier
+-- 2. BCA Courier (Diberikan DriveEngine)
 local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
-BCAModule.Init(Window, Utils, Context, UICreate)
+BCAModule.Init(Window, Utils, Context, UICreate, DriveEngine)
 
--- 3. Merdeka Event Race Farm (BARU)
+-- 3. Merdeka Event Race Farm (Diberikan DriveEngine)
 local MerdekaModule = _G.CDID_LoadModule("merdeka_farm.lua")
-MerdekaModule.Init(Window, Utils, Context, UICreate)
+MerdekaModule.Init(Window, Utils, Context, UICreate, DriveEngine)
 
-print("🚀 CDID Hub Loaded Successfully with Merdeka Event!")
+print("🚀 CDID Hub Loaded Successfully with Drive Engine & Merdeka Event!")
