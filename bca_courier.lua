@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (POWERED BY DRIVE ENGINE, TRIP STOPWATCH & DEEP SALDO SCAN)
+-- CDID HUB - BCA COURIER (POWERED BY DRIVE ENGINE & TRIP STOPWATCH)
 -- ==============================================================================
 local BCA = {}
 
@@ -19,7 +19,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		FreezeCamera = true
 	}
 
-	-- STATE, FINANCIAL STATS & STOPWATCH
+	-- STATE & FINANCIAL STATS & STOPWATCH
 	local State = {
 		Total = 0,
 		Loaded = 0,
@@ -35,9 +35,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		DeliveryActive = false,
 
 		TotalTrips = 0,
-		TripStartTime = 0,
+
+		-- Stopwatch / Timer Debugger
+		TripStartTime = nil,
 		CurrentTripElapsed = 0,
 		LastTripDuration = 0,
+		LastTripText = "Belum Ada",
 
 		-- Financial Analytics
 		StartSaldo = nil,
@@ -66,18 +69,18 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		return "Rp " .. r
 	end
 
+	local function FormatTime(seconds)
+		seconds = math.floor(seconds or 0)
+		local m = math.floor(seconds / 60)
+		local s = seconds % 60
+		return string.format("%02d:%02d (%d dtk)", m, s, seconds)
+	end
+
 	local function ParseRupiahToNumber(str)
 		if type(str) == "number" then return str end
 		if type(str) ~= "string" then return 0 end
 		local clean = str:gsub("[^%d]", "")
 		return tonumber(clean) or 0
-	end
-
-	local function FormatTime(seconds)
-		seconds = math.floor(seconds or 0)
-		local mins = math.floor(seconds / 60)
-		local secs = seconds % 60
-		return string.format("%02d:%02d", mins, secs)
 	end
 
 	local function GetBcaFolder()
@@ -143,7 +146,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	end
 
 	-- ==============================================================================
-	-- ROBUST SALDO FETCHER (DEEP SCAN TO FIX "MEMBACA...")
+	-- POCKET SALDO FETCHER (EVENT-DRIVEN FINANCIAL ANALYTICS)
 	-- ==============================================================================
 	local function FetchPocketSaldo()
 		task.spawn(function()
@@ -155,42 +158,44 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				pcall(function() appOpened:FireServer() end)
 			end
 
-			task.wait(0.5)
+			task.wait(0.4)
 
 			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
 			if not pGui then return end
 
-			local rawText = nil
+			local phoneGui = pGui:FindFirstChild("ACTUAL NEW PHONE")
+			if not phoneGui then return end
 
-			-- 1. Scan Phone GUI Spesifik
-			local phoneGui = pGui:FindFirstChild("ACTUAL NEW PHONE") or pGui:FindFirstChild("Phone")
-			if phoneGui then
+			local saldoLabel = nil
+			pcall(function()
+				local container = phoneGui:FindFirstChild("Container")
+				local holder = container and container:FindFirstChild("Holder")
+				local appCont = holder and (holder:FindFirstChild("AppContainer") or holder:FindFirstChild("AppCountainer"))
+				local myBca = appCont and appCont:FindFirstChild("MyBca")
+				local home = myBca and myBca:FindFirstChild("Home")
+				local main = home and home:FindFirstChild("Main")
+				local frame = main and main:FindFirstChild("Frame")
+				local pocket = frame and (frame:FindFirstChild("3b_POCKETRUPPIAH") or frame:FindFirstChild("3b_POCKETRUPIAH"))
+				local balFr = pocket and pocket:FindFirstChild("BalanceFrame")
+				local scroll = balFr and (balFr:FindFirstChild("ScrollingFrame") or balFr:FindFirstChild("ScrolingFrame"))
+				local ep = scroll and scroll:FindFirstChild("EventPocket")
+				local btn = ep and ep:FindFirstChild("Button")
+				saldoLabel = (btn and btn:FindFirstChild("Saldo")) or (ep and ep:FindFirstChild("Saldo"))
+			end)
+
+			if not saldoLabel then
 				for _, desc in ipairs(phoneGui:GetDescendants()) do
-					if desc:IsA("TextLabel") and desc.Text and desc.Text:find("Rp") then
-						local num = ParseRupiahToNumber(desc.Text)
-						if num > 0 then
-							rawText = desc.Text
-							break
-						end
+					if desc:IsA("TextLabel") and desc.Name == "Saldo" and desc.Text:find("Rp") then
+						saldoLabel = desc
+						break
 					end
 				end
 			end
 
-			-- 2. Fallback Deep-Scan seluruh PlayerGui
-			if not rawText then
-				for _, desc in ipairs(pGui:GetDescendants()) do
-					if desc:IsA("TextLabel") and desc.Text and desc.Text:find("Rp%s*[%d%.,]+") then
-						local num = ParseRupiahToNumber(desc.Text)
-						if num > 0 then
-							rawText = desc.Text
-							break
-						end
-					end
-				end
-			end
-
-			if rawText then
+			if saldoLabel and saldoLabel.Text and saldoLabel.Text ~= "" then
+				local rawText = saldoLabel.Text
 				local parsedNum = ParseRupiahToNumber(rawText)
+
 				if parsedNum > 0 then
 					if not State.StartSaldo then
 						State.StartSaldo = parsedNum
@@ -219,12 +224,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				end
 			end
 
-			if phoneGui then pcall(function() phoneGui.Enabled = false end) end
+			pcall(function() phoneGui.Enabled = false end)
 		end)
 	end
 
 	-- ==============================================================================
-	-- NETWORK HOOKS & EVENT LISTENERS
+	-- LAZY INITIALIZER & NETWORK HOOKS
 	-- ==============================================================================
 	task.spawn(function()
 		while not GetBcaFolder() do
@@ -261,6 +266,10 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 			if action == "SetJob" then
 				if arg1 == "BankCourier" then
 					State.Phase = "Loading"
+					-- Mulai Stopwatch jika belum berjalan
+					if not State.TripStartTime then
+						State.TripStartTime = os.clock()
+					end
 				elseif arg1 == "Unemployee" then
 					State.Phase = "Unemployee"
 					State.Loaded = 0
@@ -274,6 +283,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 			if action == "Start" then
 				State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
 				State.Phase = "Loading"
+				State.TripStartTime = os.clock()
 
 			elseif action == "Phase" then
 				State.Phase = arg1
@@ -332,9 +342,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				State.Total = 0
 				State.TotalTrips = State.TotalTrips + 1
 
-				if State.TripStartTime > 0 then
+				-- Catat durasi akhir trip
+				if State.TripStartTime then
 					State.LastTripDuration = os.clock() - State.TripStartTime
-					State.TripStartTime = 0
+					State.LastTripText = FormatTime(State.LastTripDuration)
+					print(string.format("⏱️ [BCA Timer] Trip #%d selesai dalam durasi: %s", State.TotalTrips, State.LastTripText))
+					State.TripStartTime = nil
 				end
 
 				if FloatingDash then FloatingDash.UpdateTrips(State.TotalTrips) end
@@ -354,6 +367,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		if not StartNpc or State.Phase == "Loading" or State.Phase == "Delivering" then return end
 
 		print("📍 [Step 1] Teleport ke NPC Start Job...")
+		State.TripStartTime = os.clock() -- Mulai stopwatch trip
 		Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
 		task.wait(0.5)
 		local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -466,7 +480,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 							})
 						end
 
-						-- Turun dari kursi saat tiba
 						local curHum = GetValidHumanoid()
 						if curHum and curHum.Sit then
 							curHum.Sit = false
@@ -532,13 +545,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		State.Phase = "Unemployee"
 		State.Loaded = 0
 		State.Total = 0
-		State.TripStartTime = 0
-		State.CurrentTripElapsed = 0
+		State.TripStartTime = nil
 
 		ResetPlayerCamera()
 		if autoFarmToggle then pcall(function() autoFarmToggle:Set(false) end) end
 		if statusParagraph then pcall(function() statusParagraph:SetDesc("Phase: Unemployee | Koper: 0/0") end) end
-		if timerParagraph then pcall(function() timerParagraph:SetDesc("Trip Aktif: 00:00 | Terakhir: 00:00") end) end
+		if timerParagraph then pcall(function() timerParagraph:SetDesc("Stopwatch: 00:00 (0 dtk) | Terakhir: " .. State.LastTripText) end) end
 
 		pcall(function()
 			local hum, hrp = GetValidHumanoid()
@@ -642,9 +654,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					while State.AutoFarmActive do
 						if _G.MainCoreSession ~= Context.Session then break end
 
-						-- MULAI PENGHITUNGAN STOPWATCH TRIP
-						State.TripStartTime = os.clock()
-
 						Action_StartJob()
 						local startWait = os.clock()
 						while State.Phase == "Unemployee" and (os.clock() - startWait < 8) do
@@ -716,11 +725,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 							task.wait(Config.LoopWait / 2)
 						end
 
-						if State.TripStartTime > 0 then
-							State.LastTripDuration = os.clock() - State.TripStartTime
-							State.TripStartTime = 0
-						end
-
 						FetchPocketSaldo()
 						task.wait(Config.RestartDelay)
 					end
@@ -745,29 +749,28 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 	timerParagraph = ControlsSection:Paragraph({
 		Title = "Stopwatch Trip (Debug Timer)",
-		Desc = "Trip Aktif: 00:00 | Terakhir: 00:00",
+		Desc = "Stopwatch: 00:00 (0 dtk) | Terakhir: Belum Ada",
 		Image = "clock"
 	})
 
-	-- REALTIME MONITOR & STOPWATCH LOOP
+	-- Live status & Stopwatch updater
 	task.spawn(function()
 		while task.wait(0.5) do
 			if _G.MainCoreSession ~= Context.Session then break end
-
-			if State.TripStartTime > 0 then
-				State.CurrentTripElapsed = os.clock() - State.TripStartTime
-			else
-				State.CurrentTripElapsed = 0
+			
+			local currentElapsed = 0
+			if State.TripStartTime and State.AutoFarmActive and State.Phase ~= "Unemployee" then
+				currentElapsed = os.clock() - State.TripStartTime
 			end
 
 			local statusText = string.format("Phase: %s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total))
-			local timerText = string.format("Trip Aktif: %s | Terakhir: %s", FormatTime(State.CurrentTripElapsed), FormatTime(State.LastTripDuration))
+			local timerText = string.format("Sedang Berjalan: %s | Trip Sebelumnya: %s", FormatTime(currentElapsed), State.LastTripText)
 
 			pcall(function()
 				if statusParagraph then statusParagraph:SetDesc(statusText) end
 				if timerParagraph then timerParagraph:SetDesc(timerText) end
-				if FloatingDash then
-					FloatingDash.UpdateStatus(string.format("%s (%s)", statusText, FormatTime(State.CurrentTripElapsed)))
+				if FloatingDash then 
+					FloatingDash.UpdateStatus(string.format("%s | %s", statusText, FormatTime(currentElapsed))) 
 				end
 			end)
 		end
