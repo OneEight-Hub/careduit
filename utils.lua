@@ -1,245 +1,540 @@
 -- ==============================================================================
--- CDID HUB - UTILITIES (SAFE SMART PLATFORM & CLEANER - FIXED NO ELEVATOR)
+-- CDID HUB - AUTO FARM MERDEKA RACE EVENT (POWERED BY DRIVE ENGINE)
 -- ==============================================================================
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local Lighting = game:GetService("Lighting")
-local RunService = game:GetService("RunService")
-local VirtualUser = game:GetService("VirtualUser")
+local MerdekaFarm = {}
 
-local Utils = {}
-local LocalPlayer = Players.LocalPlayer
+function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
+	local Players = game:GetService("Players")
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local LocalPlayer = Players.LocalPlayer
 
--- State Platform
-local GiantPlatform = nil
-local PlatformConn = nil
-local RespawnConn = nil
-local CurrentBaseY = nil -- Kunci ketinggian agar tidak terjadi efek eskalator
+	-- CONFIGURABLE VALUES
+	local Config = {
+		DriveSpeed = 190,
+		ReturnSpeedMultiplier = 3, -- Pengali 3x saat membawa bendera
+		MinTravelDuration = 8,
+		MinReturnDuration = 3,
+		FreezeCamera = true,
+		LoopWait = 0.5,
+		DefaultLobbyName = "CDID_AutoMerdeka"
+	}
 
-local function GetPlayerCar()
-	local vehicles = Workspace:FindFirstChild("Vehicles")
-	if not vehicles then return nil end
-	for _, v in ipairs(vehicles:GetChildren()) do
-		if v.Name:find(LocalPlayer.Name, 1, true) then
-			return v
-		end
+	-- STATE & STATS
+	local State = {
+		AutoFarmActive = false,
+		InLobby = false,
+		IsHost = false,
+		IsRacing = false,
+		IsCarryingFlag = false,
+
+		LobbyId = nil,
+		SelectedCar = "None",
+		AvailableCars = {},
+
+		-- Target Waypoints
+		CurrentTargetPos = nil,
+		FlagPos = nil,
+		BasePos = nil,
+		FlagName = "",
+
+		-- Financial & Race Stats
+		PlantedCount = 0,
+		TotalFlags = 0,
+		RacesCompleted = 0,
+		MerdekaPoints = 0,
+		LastReward = 0
+	}
+
+	local autoFarmToggle
+	local statusParagraph
+	local FloatingDash = nil
+
+	-- ==============================================================================
+	-- HELPER FUNCTIONS
+	-- ==============================================================================
+	local function FormatNumber(val)
+		if type(val) ~= "number" then return tostring(val or 0) end
+		local r = string.format("%d", math.floor(val)):reverse():gsub("%d%d%d", "%1."):reverse():gsub("^%.", "")
+		return r
 	end
-	return nil
-end
 
-local function EnsurePlatformPart()
-	if not GiantPlatform or not GiantPlatform.Parent then
-		GiantPlatform = Instance.new("Part")
-		GiantPlatform.Name = "CDID_SmartPlatform"
-		GiantPlatform.Size = Vector3.new(600, 2, 600)
-		GiantPlatform.Anchored = true
-		GiantPlatform.CanCollide = true
-		GiantPlatform.Transparency = 1 -- Transparan penuh agar tidak mengganggu visual
-		GiantPlatform.Material = Enum.Material.SmoothPlastic
-		GiantPlatform.TopSurface = Enum.SurfaceType.Smooth
-		GiantPlatform.Parent = Workspace
-	end
-	return GiantPlatform
-end
+	-- ==============================================================================
+	-- FETCH DATA MOBIL & SHOP MERDEKA
+	-- ==============================================================================
+	local function FetchOwnedCars()
+		State.AvailableCars = {}
+		local success, dataRep = pcall(function()
+			return require(ReplicatedStorage.Services.DataReplication)
+		end)
 
--- ==============================================================================
--- 1. SMART DYNAMIC PLATFORM (ANTI-ELEVATOR & STATIC BASE HEIGHT LOCK)
--- ==============================================================================
-function Utils.StartGiantPlatform()
-	EnsurePlatformPart()
-
-	-- Set Ketinggian Awal Lantai (Dikunci dari titik spawn)
-	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-	local initHrp = char:WaitForChild("HumanoidRootPart", 5)
-	if initHrp then
-		CurrentBaseY = initHrp.Position.Y - 3.5
-	else
-		CurrentBaseY = 0
-	end
-
-	-- A. Proteksi Respawn (Update ketinggian jika karakter respawn)
-	if RespawnConn then RespawnConn:Disconnect() end
-	RespawnConn = LocalPlayer.CharacterAdded:Connect(function(newChar)
-		local hrp = newChar:WaitForChild("HumanoidRootPart", 10)
-		if hrp then
-			CurrentBaseY = hrp.Position.Y - 3.5
-			local plate = EnsurePlatformPart()
-			plate.CFrame = CFrame.new(hrp.Position.X, CurrentBaseY, hrp.Position.Z)
-			print("🔄 [Safe Platform] Karakter respawn -> Base Y di-update.")
-		end
-	end)
-
-	-- B. Tracker Heartbeat (Hanya ikuti X dan Z, Y dikunci agar tidak naik ke langit!)
-	if PlatformConn then PlatformConn:Disconnect() end
-	PlatformConn = RunService.Heartbeat:Connect(function()
-		local plate = EnsurePlatformPart()
-
-		local curChar = LocalPlayer.Character
-		local hum = curChar and curChar:FindFirstChildOfClass("Humanoid")
-		local hrp = curChar and curChar:FindFirstChild("HumanoidRootPart")
-		local car = GetPlayerCar()
-
-		if hum and hum.Health <= 0 then return end
-
-		-- 1. Jika sedang di dalam mobil
-		if hum and hum.Sit and car then
-			local carPrimary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
-			if carPrimary then
-				-- Ketinggian platform menyesuaikan mobil dengan aman
-				plate.CFrame = CFrame.new(carPrimary.Position.X, carPrimary.Position.Y - 3.0, carPrimary.Position.Z)
-				CurrentBaseY = carPrimary.Position.Y - 3.0
-				return
+		if success and dataRep and dataRep.GetVehicleData then
+			local ok, vehData = pcall(dataRep.GetVehicleData, dataRep)
+			if ok and type(vehData) == "table" then
+				for carName, _ in pairs(vehData) do
+					table.insert(State.AvailableCars, carName)
+				end
 			end
 		end
 
-		-- 2. Jika jalan kaki / berdiri (Gunakan X dan Z dari HRP, tapi Y tetap stabil!)
-		if hrp then
-			-- Jika player pindah area tinggi (misal lantai 2), update secara bertahap bukan per-frame micro
-			if math.abs((hrp.Position.Y - 3.5) - CurrentBaseY) > 8 then
-				CurrentBaseY = hrp.Position.Y - 3.5
+		if #State.AvailableCars == 0 and ReplicatedStorage:FindFirstChild("CarData") then
+			for _, car in ipairs(ReplicatedStorage.CarData:GetChildren()) do
+				table.insert(State.AvailableCars, car.Name)
 			end
-
-			plate.CFrame = CFrame.new(hrp.Position.X, CurrentBaseY, hrp.Position.Z)
 		end
-	end)
 
-	print("🛡️ [Safe Platform] Smart Platform Anti-Elevator aktif.")
-end
-
-function Utils.StopGiantPlatform()
-	if PlatformConn then
-		PlatformConn:Disconnect()
-		PlatformConn = nil
-	end
-	if RespawnConn then
-		RespawnConn:Disconnect()
-		RespawnConn = nil
-	end
-	if GiantPlatform then
-		GiantPlatform:Destroy()
-		GiantPlatform = nil
-	end
-	CurrentBaseY = nil
-	print("🛑 [Safe Platform] Smart Platform dinonaktifkan.")
-end
-
--- ==============================================================================
--- 2. MAP CLEANER (HANYA HAPUS MAP & MELAWAI, MY_BCA_COLLAB UTUH 100%)
--- ==============================================================================
-function Utils.DestroyHeavyMaps()
-	-- Aktifkan platform terlebih dahulu
-	Utils.StartGiantPlatform()
-
-	-- 1. Hapus Folder Map
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		map:Destroy()
-		print("🗑️ [Cleaner] Workspace.Map berhasil dihapus total.")
+		table.sort(State.AvailableCars)
+		if #State.AvailableCars > 0 and State.SelectedCar == "None" then
+			State.SelectedCar = State.AvailableCars[1]
+		end
 	end
 
-	-- 2. Hapus Folder MELAWAI
-	local melawai = Workspace:FindFirstChild("MELAWAI") or Workspace:FindFirstChild("Melawai")
-	if melawai then
-		melawai:Destroy()
-		print("🗑️ [Cleaner] Workspace.MELAWAI berhasil dihapus total.")
-	end
+	local function FetchMerdekaShopData()
+		task.spawn(function()
+			local netModule = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Network")
+			if not netModule then return end
+			local ok, Net = pcall(require, netModule)
+			if not ok or not Net then return end
 
-	-- 3. Listener jika Map / MELAWAI di-spawn ulang oleh game
-	if not _G.CDID_MapDestroyListener then
-		_G.CDID_MapDestroyListener = Workspace.ChildAdded:Connect(function(child)
-			local name = child.Name:upper()
-			if name == "MAP" or name == "MELAWAI" then
-				task.wait(0.1)
-				child:Destroy()
-				print("🗑️ [Cleaner] Map respawn berhasil dicegat & dihapus.")
+			local data = Net:InvokeServer("MerdekaShopData")
+			if type(data) == "table" then
+				State.MerdekaPoints = data.Points or data.Point or 0
+				if FloatingDash then
+					FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
+				end
 			end
 		end)
 	end
 
-	-- 4. Optimasi Lighting & Partikel
-	Utils.EnablePerformanceMode()
-end
+	-- Buka GUI Shop CDID dari mana saja
+	local function OpenMerdekaShopDirect()
+		task.spawn(function()
+			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+			local eventGui = pGui and pGui:FindFirstChild("MerdekaEvent")
+			local modules = eventGui and eventGui:FindFirstChild("Modules")
+			local shopModObj = modules and modules:FindFirstChild("MerdekaShopModule")
+			local netModule = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Network")
 
-function Utils.EnablePerformanceMode()
-	Lighting.GlobalShadows = false
-	Lighting.FogEnd = 9e9
-	Lighting.Brightness = 1
+			if shopModObj and netModule then
+				local okShop, ShopModule = pcall(require, shopModObj)
+				local okNet, Net = pcall(require, netModule)
 
-	for _, effect in ipairs(Lighting:GetChildren()) do
-		if effect:IsA("PostProcessEffect") or effect:IsA("BloomEffect") or effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect") or effect:IsA("ColorCorrectionEffect") then
-			effect.Enabled = false
-		end
-	end
+				if okShop and ShopModule and okNet and Net then
+					local shopData = Net:InvokeServer("MerdekaShopData")
+					if type(shopData) == "table" and shopData.Rewards then
+						local owned = shopData.Owned or {}
+						local formattedData = {
+							["Point"] = shopData.Points or 0
+						}
+						for _, reward in ipairs(shopData.Rewards) do
+							formattedData[reward.dataKey] = owned[reward.dataKey] and 1 or 0
+						end
 
-	for _, obj in ipairs(Workspace:GetDescendants()) do
-		if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
-			obj.Enabled = false
-		end
-	end
+						ShopModule.SetCatalog(shopData.Rewards)
+						ShopModule.UpdateData(formattedData)
+						ShopModule.Open()
 
-	if not _G.CDID_ParticlesListener then
-		_G.CDID_ParticlesListener = Workspace.DescendantAdded:Connect(function(newObj)
-			if newObj:IsA("ParticleEmitter") or newObj:IsA("Trail") or newObj:IsA("Smoke") or newObj:IsA("Fire") or newObj:IsA("Sparkles") then
-				newObj.Enabled = false
+						State.MerdekaPoints = shopData.Points or 0
+						if FloatingDash then
+							FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
+						end
+						print("🛒 [Merdeka Shop] Shop dibuka! Poin:", State.MerdekaPoints)
+					end
+				end
+			else
+				warn("⚠️ [Merdeka Shop] MerdekaShopModule belum siap di PlayerGui!")
 			end
 		end)
 	end
-end
 
--- ==============================================================================
--- 3. UTILITIES INTERAKSI & ANTI AFK
--- ==============================================================================
-function Utils.SafeTeleportChar(targetCFrame, delayTime)
-	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-	local hrp = char:FindFirstChild("HumanoidRootPart")
-	if hrp then
-		hrp.Anchored = false
-		hrp.CFrame = targetCFrame + Vector3.new(0, 1.2, 0)
-		hrp.AssemblyLinearVelocity = Vector3.zero
-		hrp.AssemblyAngularVelocity = Vector3.zero
-		if delayTime and delayTime > 0 then task.wait(delayTime) end
+	FetchOwnedCars()
+	FetchMerdekaShopData()
+
+	-- ==============================================================================
+	-- REMOTES & NETWORK HOOKS
+	-- ==============================================================================
+	local RaceRemotes = ReplicatedStorage:WaitForChild("RaceRemotes", 10)
+	local CreateLobbyRemote = RaceRemotes and RaceRemotes:WaitForChild("CreateLobby", 5)
+	local JoinLobbyRemote   = RaceRemotes and RaceRemotes:WaitForChild("JoinLobby", 5)
+	local LeaveLobbyRemote  = RaceRemotes and RaceRemotes:WaitForChild("LeaveLobby", 5)
+	local ToggleReadyRemote = RaceRemotes and RaceRemotes:WaitForChild("ToggleReady", 5)
+	local StartRaceRemote   = RaceRemotes and RaceRemotes:WaitForChild("StartRace", 5)
+	local SelectCarRemote   = RaceRemotes and RaceRemotes:WaitForChild("SelectCar", 5)
+	local GetLobbiesFunc    = RaceRemotes and RaceRemotes:WaitForChild("GetLobbies", 5)
+	local LobbyUpdatedEvent = RaceRemotes and RaceRemotes:WaitForChild("LobbyUpdated", 5)
+
+	-- 1. Hook Status Lobi
+	if LobbyUpdatedEvent then
+		local lobbyHook = LobbyUpdatedEvent.OnClientEvent:Connect(function(lobbyData)
+			if typeof(lobbyData) ~= "table" or lobbyData.mode ~= "merdeka" then return end
+
+			State.LobbyId = lobbyData.id
+			State.InLobby = true
+
+			local isReady = false
+			local allReady = true
+
+			if lobbyData.players then
+				for _, p in ipairs(lobbyData.players) do
+					if p.userId == LocalPlayer.UserId then
+						isReady = p.ready
+						if p.isHost then State.IsHost = true end
+					end
+					if not p.ready then
+						allReady = false
+					end
+				end
+			end
+
+			-- Auto Ready
+			if State.AutoFarmActive and not isReady and State.SelectedCar ~= "None" then
+				task.wait(0.5)
+				if ToggleReadyRemote then ToggleReadyRemote:FireServer() end
+			end
+
+			-- Auto Start Race jika Host
+			if State.AutoFarmActive and State.IsHost and allReady and (lobbyData.playerCount >= (lobbyData.minPlayers or 1)) then
+				task.wait(1.5)
+				if StartRaceRemote then StartRaceRemote:FireServer() end
+			end
+		end)
+		table.insert(Context.Hooks, lobbyHook)
 	end
-end
 
-function Utils.TriggerPrompt(prompt, targetPart, isTrunk)
-	if not prompt then return false end
-	prompt.Enabled = true
-	prompt.RequiresLineOfSight = false
-	prompt.MaxActivationDistance = 35
+	-- 2. Hook Gameplay MerdekaHUD
+	local NetworkModule = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Network")
+	if NetworkModule then
+		local ok, Net = pcall(require, NetworkModule)
+		if ok and Net and Net.OnClientEvent then
+			local hudHook = Net.OnClientEvent("MerdekaHUD", function(action, payload)
+				payload = payload or {}
 
-	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-	local hrp = char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return false end
+				if action == "Init" or action == "Briefing" or action == "Countdown" then
+					State.IsRacing = true
 
-	if targetPart then
-		hrp.Anchored = false
-		if isTrunk then
-			hrp.CFrame = CFrame.new(targetPart.Position + (targetPart.CFrame.LookVector * -1.8), targetPart.Position)
-		else
-			hrp.CFrame = targetPart.CFrame * CFrame.new(0, 0, 1.5)
+					-- Bypass / Tutup UI Briefing bawaan
+					local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+					local eventGui = pGui and pGui:FindFirstChild("MerdekaEvent")
+					if eventGui then
+						local container = eventGui:FindFirstChild("Container")
+						if container then
+							for _, name in ipairs({"Briefing", "Lobby", "LobbyMenu", "Countdown", "Overlay"}) do
+								local frame = container:FindFirstChild(name)
+								if frame then frame.Visible = false end
+							end
+						end
+					end
+
+				elseif action == "Start" then
+					State.IsRacing = true
+					State.IsCarryingFlag = false
+					State.FlagPos = payload.FlagPos
+					State.FlagName = payload.FlagName or "Flag"
+					State.TotalFlags = payload.Total or 0
+					State.CurrentTargetPos = payload.FlagPos
+					print(string.format("🚩 [MerdekaHUD] Race Mulai! Target Bendera: %s", tostring(State.FlagName)))
+
+				elseif action == "Picked" then
+					State.IsCarryingFlag = true
+					State.BasePos = payload.BasePos
+					State.CurrentTargetPos = payload.BasePos
+					print("📦 [MerdekaHUD] Bendera diambil! Boost 3X Speed menuju Base...")
+
+				elseif action == "Planted" then
+					State.IsCarryingFlag = false
+					State.PlantedCount = State.PlantedCount + 1
+					print(string.format("🎯 [MerdekaHUD] Bendera berhasil ditancapkan! (Total: %d)", State.PlantedCount))
+
+				elseif action == "Tick" then
+					if payload.Planted then State.PlantedCount = payload.Planted end
+					if payload.Total then State.TotalFlags = payload.Total end
+
+				elseif action == "Result" then
+					State.IsRacing = false
+					State.InLobby = false
+					State.IsCarryingFlag = false
+					State.RacesCompleted = State.RacesCompleted + 1
+					State.LastReward = payload.Reward or 0
+
+					print(string.format("🏆 [MerdekaHUD] Balapan Selesai! Reward: +%s", FormatNumber(State.LastReward)))
+
+					-- Bypass / Tutup UI Result
+					local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+					local eventGui = pGui and pGui:FindFirstChild("MerdekaEvent")
+					if eventGui then
+						local resFrame = eventGui:FindFirstChild("Container") and eventGui.Container:FindFirstChild("Result")
+						if resFrame then resFrame.Visible = false end
+					end
+
+					FetchMerdekaShopData()
+
+				elseif action == "Left" or action == "Reset" then
+					State.IsRacing = false
+					State.InLobby = false
+					State.IsCarryingFlag = false
+				end
+			end)
+			table.insert(Context.Hooks, hudHook)
 		end
-		hrp.AssemblyLinearVelocity = Vector3.zero
-		hrp.AssemblyAngularVelocity = Vector3.zero
-		task.wait(0.1)
 	end
 
-	if fireproximityprompt then
-		fireproximityprompt(prompt)
-	else
-		prompt:InputHoldBegin()
-		task.wait(prompt.HoldDuration + 0.1)
-		prompt:InputHoldEnd()
+	-- ==============================================================================
+	-- CORE AUTOFARM LOOP (MENGGUNAKAN UNIVERSAL DRIVE ENGINE)
+	-- ==============================================================================
+	local function StartAutoFarmLoop()
+		task.spawn(function()
+			print("🚀 [Merdeka Farm] Loop Auto Farm Dimulai...")
+			FetchMerdekaShopData()
+
+			while State.AutoFarmActive do
+				if _G.MainCoreSession ~= Context.Session then break end
+
+				-- A. JIKA SEDANG BALAPAN: GERAKKAN MOBIL VIA DRIVE ENGINE
+				if State.IsRacing then
+					if State.CurrentTargetPos and DriveEngine and not DriveEngine.IsDriving() then
+						local targetSpeed = Config.DriveSpeed
+						local minDur = Config.MinTravelDuration
+
+						-- Boost 3X Speed jika sedang membawa bendera kembali ke base
+						if State.IsCarryingFlag then
+							targetSpeed = Config.DriveSpeed * Config.ReturnSpeedMultiplier
+							minDur = Config.MinReturnDuration
+						end
+
+						DriveEngine.DriveTo(State.CurrentTargetPos, {
+							Speed = targetSpeed,
+							MinDuration = minDur,
+							FreezeCam = Config.FreezeCamera,
+							StopCondition = function()
+								return not State.AutoFarmActive or not State.IsRacing or (_G.MainCoreSession ~= Context.Session)
+							end
+						})
+					end
+					task.wait(Config.LoopWait)
+					continue
+				end
+
+				-- B. JIKA BELUM MASUK LOBI: CARI ATAU BUAT LOBI BARU
+				if not State.InLobby and not State.IsRacing then
+					local targetLobbyId = nil
+
+					if GetLobbiesFunc then
+						local ok, lobbies = pcall(function() return GetLobbiesFunc:InvokeServer() end)
+						if ok and type(lobbies) == "table" then
+							for _, l in ipairs(lobbies) do
+								if l.mode == "merdeka" and l.status == "waiting" and (l.playerCount < (l.maxPlayers or 4)) then
+									targetLobbyId = l.id
+									break
+								end
+							end
+						end
+					end
+
+					if targetLobbyId and JoinLobbyRemote then
+						print("🚪 [Merdeka Farm] Bergabung ke lobi publik ID:", targetLobbyId)
+						JoinLobbyRemote:FireServer(targetLobbyId)
+						task.wait(1.0)
+					elseif CreateLobbyRemote then
+						print("✨ [Merdeka Farm] Membuat lobi Merdeka baru...")
+						CreateLobbyRemote:FireServer(Config.DefaultLobbyName, "merdeka")
+						State.IsHost = true
+						task.wait(1.0)
+					end
+
+					-- Pilih mobil
+					if State.SelectedCar ~= "None" and SelectCarRemote then
+						task.wait(0.5)
+						SelectCarRemote:FireServer(State.SelectedCar)
+					end
+				end
+
+				-- C. JIKA DI DALAM LOBI: KUNCI STATUS READY
+				if State.InLobby and ToggleReadyRemote and not State.IsRacing then
+					ToggleReadyRemote:FireServer()
+					task.wait(1.0)
+				end
+
+				task.wait(Config.LoopWait)
+			end
+
+			-- Reset Saat OFF
+			if LeaveLobbyRemote and State.InLobby then
+				LeaveLobbyRemote:FireServer()
+			end
+			State.InLobby = false
+			State.IsRacing = false
+			if DriveEngine then DriveEngine.FreezeCamera(false) end
+		end)
 	end
 
-	return true
-end
+	-- ==============================================================================
+	-- UI WINDUI TAB SETUP
+	-- ==============================================================================
+	local MerdekaTab = Window:Tab({
+		Title = "Merdeka Event",
+		Icon = "solar:flag-bold"
+	})
 
-function Utils.SetupAntiAFK()
-	if _G.AntiAfkConnection then pcall(function() _G.AntiAfkConnection:Disconnect() end) end
-	_G.AntiAfkConnection = LocalPlayer.Idled:Connect(function()
-		VirtualUser:CaptureController()
-		VirtualUser:ClickButton2(Vector2.new(0, 0))
+	local ControlsSection = MerdekaTab:Section({ Title = "Kontrol Auto Farm Merdeka" })
+	local CarSection      = MerdekaTab:Section({ Title = "Pilihan Mobil Balap" })
+	local SettingsSection = MerdekaTab:Section({ Title = "Konfigurasi Drive Engine" })
+	local StatusSection   = MerdekaTab:Section({ Title = "Live Monitor & Shop Points" })
+
+	StatusSection:Button({
+		Title = "Toggle Floating Monitor (Merdeka Points)",
+		Desc = "Buka overlay mini untuk memantau status balapan dan poin reward.",
+		Callback = function()
+			if not FloatingDash then
+				FloatingDash = UICreate.CreateFloatingDashboard("Merdeka Race Monitor")
+				FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
+				FloatingDash.UpdateStatus("Status: Standby")
+				FloatingDash.UpdateTrips(State.RacesCompleted)
+				FetchMerdekaShopData()
+			else
+				FloatingDash.Destroy()
+				FloatingDash = nil
+			end
+		end
+	})
+
+	StatusSection:Button({
+		Title = "Buka Merdeka Shop UI",
+		Desc = "Buka katalog Merdeka Event Shop langsung tanpa ke NPC.",
+		Callback = function()
+			OpenMerdekaShopDirect()
+		end
+	})
+
+	-- DROPDOWN MOBIL
+	local carDropdown = CarSection:Dropdown({
+		Title = "Pilih Mobil Balap",
+		Desc = "Mobil yang akan otomatis dipilih saat masuk lobi.",
+		Values = #State.AvailableCars > 0 and State.AvailableCars or { "None" },
+		Value = State.SelectedCar,
+		Callback = function(chosen)
+			State.SelectedCar = chosen
+			print("🚗 [Merdeka Farm] Mobil dipilih:", chosen)
+			if State.InLobby and SelectCarRemote and chosen ~= "None" then
+				SelectCarRemote:FireServer(chosen)
+			end
+		end
+	})
+
+	CarSection:Button({
+		Title = "Refresh Daftar Mobil",
+		Callback = function()
+			FetchOwnedCars()
+			if carDropdown and carDropdown.SetValues then
+				carDropdown:SetValues(State.AvailableCars)
+			end
+			print("🔄 [Merdeka Farm] Daftar mobil diperbarui.")
+		end
+	})
+
+	-- TOGGLE AUTO FARM
+	autoFarmToggle = ControlsSection:Toggle({
+		Title = "Auto Farm Merdeka Race (Safe Drive)",
+		Desc = "Auto Matchmaking -> Drive Ambil Bendera -> 3X Speed Return Base -> Loop.",
+		Value = false,
+		Callback = function(active)
+			if State.AutoFarmActive == active then return end
+			State.AutoFarmActive = active
+
+			if active then
+				print("🚀 [Merdeka Farm] Mengaktifkan Auto Farm...")
+				if Utils.DestroyHeavyMaps then
+					Utils.DestroyHeavyMaps()
+				elseif Utils.StartGiantPlatform then
+					Utils.StartGiantPlatform()
+				end
+				StartAutoFarmLoop()
+			else
+				print("🛑 [Merdeka Farm] Mematikan Auto Farm...")
+				if Utils.StopGiantPlatform then
+					Utils.StopGiantPlatform()
+				end
+			end
+		end
+	})
+
+	statusParagraph = ControlsSection:Paragraph({
+		Title = "Status Pekerjaan",
+		Desc = "Status: Idle | Bendera: 0/0 | Selesai: 0",
+		Image = "flag"
+	})
+
+	-- Live status, Stopwatch & Points Polling Loop
+	task.spawn(function()
+		local pollCounter = 0
+		while task.wait(0.5) do
+			if _G.MainCoreSession ~= Context.Session then break end
+
+			-- Polling poin ke server setiap ~10 detik
+			pollCounter = pollCounter + 1
+			if pollCounter >= 20 then
+				pollCounter = 0
+				FetchMerdekaShopData()
+			end
+
+			local stateText = "Idle"
+			if State.IsRacing then
+				if State.IsCarryingFlag then
+					stateText = "⚡ Mengantar Bendera ke Base (3X Speed)"
+				else
+					stateText = "Meluncur ke Titik Bendera 🚩"
+				end
+			elseif State.InLobby then
+				stateText = "Di Lobi (Menunggu Ready/Start) ⏳"
+			end
+
+			local fullDesc = string.format("Status: %s | Bendera: %d/%d | Selesai: %d | Poin: %s PTS", stateText, State.PlantedCount, State.TotalFlags, State.RacesCompleted, FormatNumber(State.MerdekaPoints))
+			pcall(function()
+				if statusParagraph then statusParagraph:SetDesc(fullDesc) end
+				if FloatingDash then
+					FloatingDash.UpdateStatus(stateText)
+					FloatingDash.UpdateTrips(State.RacesCompleted)
+					FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
+				end
+			end)
+		end
 	end)
+
+	SettingsSection:Toggle({
+		Title = "Freeze Camera Saat Melaju (FPS Boost)",
+		Desc = "Mengunci kamera saat mobil bergerak untuk menurunkan beban render GPU.",
+		Value = Config.FreezeCamera,
+		Callback = function(val)
+			Config.FreezeCamera = val
+		end
+	})
+
+	SettingsSection:Input({
+		Title = "Kecepatan Base (Ambil Bendera)",
+		Value = tostring(Config.DriveSpeed),
+		Callback = function(val)
+			local num = tonumber(val)
+			if num then Config.DriveSpeed = num end
+		end
+	})
+
+	SettingsSection:Slider({
+		Title = "Pengali Kecepatan Return (Multiplier)",
+		Value = { Min = 1, Max = 5, Default = 3 },
+		Callback = function(val)
+			Config.ReturnSpeedMultiplier = val
+		end
+	})
+
+	SettingsSection:Slider({
+		Title = "Durasi Minimum Ambil Bendera",
+		Value = { Min = 5, Max = 30, Default = 8 },
+		Callback = function(val) Config.MinTravelDuration = val end
+	})
+
+	SettingsSection:Slider({
+		Title = "Durasi Minimum Return ke Base",
+		Value = { Min = 1, Max = 10, Default = 3 },
+		Callback = function(val) Config.MinReturnDuration = val end
+	})
 end
 
-return Utils
+return MerdekaFarm
