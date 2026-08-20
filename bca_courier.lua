@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (FULL FIX: STANDALONE HELPERS & ZERO NIL ERROR)
+-- CDID HUB - BCA COURIER (FULL STABLE, NO CRASH, GROUNDED PHYSIC & DEBUG TIMER)
 -- ==============================================================================
 local BCA = {}
 
@@ -36,7 +36,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 		TotalTrips = 0,
 
-		-- Stopwatch / Timer Debugger
+		-- Stopwatch Debugger
 		TripStartTime = nil,
 		CurrentTripElapsed = 0,
 		LastTripDuration = 0,
@@ -100,7 +100,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		return nil, nil
 	end
 
-	-- Menstabilkan fisika karakter agar tidak melayang
+	-- Menstabilkan posisi & fisika karakter agar tidak melayang / terpental
 	local function RestoreCharacterPhysics()
 		local hum, hrp = GetValidHumanoid()
 		if hrp then
@@ -115,7 +115,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		end
 	end
 
-	-- Teleportasi presisi dengan jarak aman di depan target
+	-- Teleportasi presisi dengan jarak aman di depan target (bebas tabrakan part)
 	local function SafeTeleportInFront(targetCF, offsetDist)
 		offsetDist = offsetDist or 4.0
 		local hum, hrp = GetValidHumanoid()
@@ -129,7 +129,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		task.wait(Config.ActionDelay)
 	end
 
-	-- Eksekusi Proximity Prompt langsung
 	local function TriggerPromptDirect(prompt)
 		if not prompt or not prompt:IsA("ProximityPrompt") then return end
 		prompt.RequiresLineOfSight = false
@@ -403,7 +402,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	end)
 
 	-- ==============================================================================
-	-- AUTOFARM SEQUENCES (DEKAT RADIUS < 10 STUDS)
+	-- AUTOFARM SEQUENCES
 	-- ==============================================================================
 	local function Action_StartJob()
 		local Mf = GetBcaFolder()
@@ -483,7 +482,9 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					TriggerPromptDirect(koperPrompt)
 
 					local timeout = os.clock()
-					while not State.Carrying and State.AutoLoading and (os.clock() - timeout < 2.5) do task.wait(0.1) end
+					while not State.Carrying and State.AutoLoading and (os.clock() - timeout < 2.5) do 
+						task.wait(0.1) 
+					end
 					State.IsBusy = false
 				elseif State.Carrying and not State.IsBusy then
 					if bagasiPoint and muatPrompt then
@@ -492,7 +493,9 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 						TriggerPromptDirect(muatPrompt)
 
 						local timeout = os.clock()
-						while State.Carrying and State.AutoLoading and (os.clock() - timeout < 2.5) do task.wait(0.1) end
+						while State.Carrying and State.AutoLoading and (os.clock() - timeout < 2.5) do 
+							task.wait(0.1) 
+						end
 						State.IsBusy = false
 						task.wait(Config.ActionDelay)
 					else
@@ -511,9 +514,18 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 		task.spawn(function()
 			print("🏧 [Step 4] Memulai siklus pengantaran koper ke ATM...")
+
+			-- Tunggu Target Koordinat ATM dari Server
+			local waitTarget = os.clock()
+			while not State.TargetPos and State.AutoDelivering and (os.clock() - waitTarget < 5) do
+				task.wait(0.2)
+			end
+
 			while State.AutoDelivering do
 				if _G.MainCoreSession ~= Context.Session then break end
-				if (State.Loaded <= 0 and not State.Carrying) or (State.Phase == "Returning" and State.Loaded <= 0) then
+
+				if (State.Loaded <= 0 and not State.Carrying) or (State.Phase == "Returning") then
+					print("🏁 [Step 4] Pengantaran selesai / Fase returning.")
 					State.AutoDelivering = false
 					break
 				end
@@ -543,12 +555,13 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 						RestoreCharacterPhysics()
 						State.IsBusy = false
+						task.wait(Config.ActionDelay)
 					end
 
 					if not State.AutoDelivering then break end
 
 					-- 2. FASE AMBIL KOPER DARI BAGASI
-					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 65 then
+					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 75 then
 						State.IsBusy = true
 						SafeTeleportInFront(bagasiPoint.CFrame, 1.8)
 						TriggerPromptDirect(ambilPrompt)
@@ -563,26 +576,10 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 					if not State.AutoDelivering then break end
 
-					-- 3. FASE ISI KOPER KE ATM (MENDARAT DI LANTAI SECARA NATURAL)
-					if State.Carrying and State.TargetPos then
+					-- 3. FASE ISI KOPER KE ATM (MURNI REMOTE EVENT TANPA TELEPORTASI KE MESIN)
+					if State.Carrying then
 						State.IsBusy = true
-
-						local curHum, curHrp = GetValidHumanoid()
-						if curHrp then
-							local rayParams = RaycastParams.new()
-							rayParams.FilterDescendantsInstances = { LocalPlayer.Character, car }
-							rayParams.FilterType = Enum.RaycastFilterType.Exclude
-
-							local rayResult = Workspace:Raycast(State.TargetPos + Vector3.new(0, 5, 0), Vector3.new(0, -25, 0), rayParams)
-							local groundY = rayResult and rayResult.Position.Y or (State.TargetPos.Y - 2.5)
-
-							local standPos = Vector3.new(State.TargetPos.X, groundY + 3.0, State.TargetPos.Z)
-							curHrp.AssemblyLinearVelocity = Vector3.zero
-							curHrp.AssemblyAngularVelocity = Vector3.zero
-							curHrp.CFrame = CFrame.new(standPos)
-						end
-
-						task.wait(Config.ActionDelay)
+						task.wait(0.2)
 
 						if Network then 
 							Network:FireServer("BankCourier", "FillStart") 
@@ -593,7 +590,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 							task.wait(0.2) 
 						end
 
-						RestoreCharacterPhysics()
 						State.IsBusy = false
 						task.wait(Config.ActionDelay)
 					end
@@ -744,7 +740,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 						end
 						if not State.AutoFarmActive then break end
 
-						-- Selesaikan Pekerjaan
+						-- Selesaikan Pekerjaan di NPC Start
 						local StartNpc = Mf and Mf:FindFirstChild("NPC_START_JOB")
 						if StartNpc then
 							SafeTeleportInFront(StartNpc:GetPivot(), 4.0)
