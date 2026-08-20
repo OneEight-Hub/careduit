@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (ANTI-COLLISION ATM & NO-CLIP FIX)
+-- CDID HUB - BCA COURIER (REMOTE-FIRST / ZERO NPC TELEPORT)
 -- ==============================================================================
 local BCA = {}
 
@@ -58,6 +58,8 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	local statusParagraph
 	local timerParagraph
 	local Network = nil
+	local NpcDialogEvent = nil
+	local JobRemote = nil
 	local FloatingDash = nil
 
 	-- ==============================================================================
@@ -98,19 +100,19 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		return nil, nil
 	end
 
-	-- NONAKTIFKAN COLLISION PADA SEMUA MODEL ATM & PROPS TERKAIT
-	local function DisableATMCollisions()
-		local Mf = GetBcaFolder()
-		if not Mf then return end
+	-- PROMPT TRIGGER DARI JARAK JAUH TANPA TELEPORTASI
+	local function RemoteTriggerPrompt(prompt)
+		if not prompt or not prompt:IsA("ProximityPrompt") then return end
+		prompt.RequiresLineOfSight = false
+		prompt.MaxActivationDistance = math.huge
+		prompt.Enabled = true
 
-		for _, obj in ipairs(Mf:GetDescendants()) do
-			if obj:IsA("BasePart") then
-				local lowerName = obj.Name:lower()
-				local parentName = (obj.Parent and obj.Parent.Name:lower()) or ""
-				if lowerName:find("atm") or parentName:find("atm") or lowerName:find("mesin") or lowerName:find("koper") then
-					obj.CanCollide = false
-				end
-			end
+		if fireproximityprompt then
+			fireproximityprompt(prompt)
+		else
+			prompt:InputHoldBegin()
+			task.wait(prompt.HoldDuration + 0.05)
+			prompt:InputHoldEnd()
 		end
 	end
 
@@ -162,7 +164,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	end
 
 	-- ==============================================================================
-	-- POCKET SALDO FETCHER (EVENT-DRIVEN FINANCIAL ANALYTICS)
+	-- POCKET SALDO FETCHER
 	-- ==============================================================================
 	local function FetchPocketSaldo()
 		task.spawn(function()
@@ -254,7 +256,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		end
 
 		FetchPocketSaldo()
-		DisableATMCollisions()
 
 		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
 		local netModule = modules and modules:WaitForChild("Network", 15)
@@ -262,15 +263,15 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 		local netContainer = ReplicatedStorage:WaitForChild("NetworkContainer", 15)
 		local remoteEvents = netContainer and netContainer:WaitForChild("RemoteEvents", 15)
-		local NpcDialogEvent = remoteEvents and remoteEvents:WaitForChild("NpcDialog", 15)
-		local JobRemote = remoteEvents and remoteEvents:WaitForChild("Job", 15)
+		NpcDialogEvent = remoteEvents and remoteEvents:WaitForChild("NpcDialog", 15)
+		JobRemote = remoteEvents and remoteEvents:WaitForChild("Job", 15)
 
 		if not Network or not NpcDialogEvent or not JobRemote then return end
 
 		local dialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action)
 			if action == "Start" then
 				task.spawn(function()
-					task.wait(0.5)
+					task.wait(0.2)
 					NpcDialogEvent:FireServer("Finish", nil)
 					if firesignal then pcall(firesignal, NpcDialogEvent.OnClientEvent, "Abort") end
 					ResetPlayerCamera()
@@ -300,7 +301,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
 				State.Phase = "Loading"
 				State.TripStartTime = os.clock()
-				DisableATMCollisions()
 
 			elseif action == "Phase" then
 				State.Phase = arg1
@@ -374,21 +374,25 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	end)
 
 	-- ==============================================================================
-	-- AUTOFARM SEQUENCES
+	-- AUTOFARM SEQUENCES (REMOTE-FIRST / ZERO NPC TELEPORT)
 	-- ==============================================================================
 	local function Action_StartJob()
 		local Mf = GetBcaFolder()
-		if not Mf then return end
+		if not Mf or State.Phase == "Loading" or State.Phase == "Delivering" then return end
 		local StartNpc = Mf:FindFirstChild("NPC_START_JOB")
-		if not StartNpc or State.Phase == "Loading" or State.Phase == "Delivering" then return end
+		if not StartNpc then return end
 
-		print("📍 [Step 1] Teleport ke NPC Start Job...")
+		print("⚡ [Step 1] Triggering Start Job NPC via Remote...")
 		State.TripStartTime = os.clock()
-		Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
-		task.wait(0.5)
+
 		local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
-		if prompt then prompt.Enabled = true end
-		Utils.TriggerPrompt(prompt, StartNpc.PrimaryPart or StartNpc:FindFirstChildWhichIsA("BasePart"))
+		if prompt then
+			RemoteTriggerPrompt(prompt)
+		end
+
+		if NpcDialogEvent then
+			NpcDialogEvent:FireServer("Finish", nil)
+		end
 
 		local dialogWait = os.clock()
 		while State.Phase == "Unemployee" and (os.clock() - dialogWait < 4) do task.wait(0.1) end
@@ -401,13 +405,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		local CarSpawner = Mf:FindFirstChild("CAR_SPAWNER_NPC")
 		if not CarSpawner then return end
 
-		print("🚗 [Step 2] Teleport ke Spawner Mobil...")
-		Utils.SafeTeleportChar(CarSpawner:GetPivot(), Config.ActionDelay)
-		task.wait(0.5)
+		print("🚗 [Step 2] Triggering Car Spawner via Remote...")
 		local spawnPrompt = CarSpawner:FindFirstChildWhichIsA("ProximityPrompt", true)
-		if spawnPrompt then spawnPrompt.Enabled = true end
-		Utils.TriggerPrompt(spawnPrompt, CarSpawner.PrimaryPart or CarSpawner:FindFirstChildWhichIsA("BasePart"))
-		task.wait(1.2)
+		if spawnPrompt then
+			RemoteTriggerPrompt(spawnPrompt)
+		end
+		task.wait(1.0)
 	end
 
 	local function RunLoadingLoop()
@@ -436,18 +439,18 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 				if not State.Carrying and not State.IsBusy then
 					State.IsBusy = true
-					Utils.SafeTeleportChar(KoperSpawn:GetPivot(), Config.ActionDelay)
-					Utils.TriggerPrompt(koperPrompt, KoperSpawn.PrimaryPart or KoperSpawn:FindFirstChildWhichIsA("BasePart"))
+					-- Ambil koper dari rak
+					RemoteTriggerPrompt(koperPrompt)
 					local timeout = os.clock()
-					while not State.Carrying and State.AutoLoading and (os.clock() - timeout < Config.ActionDelay * 10) do task.wait(Config.LoopWait / 2) end
+					while not State.Carrying and State.AutoLoading and (os.clock() - timeout < 2.0) do task.wait(0.1) end
 					State.IsBusy = false
 				elseif State.Carrying and not State.IsBusy then
 					if bagasiPoint and muatPrompt then
 						State.IsBusy = true
-						Utils.SafeTeleportChar(bagasiPoint.CFrame, Config.ActionDelay)
-						Utils.TriggerPrompt(muatPrompt, bagasiPoint, true)
+						-- Masukkan koper ke bagasi mobil
+						RemoteTriggerPrompt(muatPrompt)
 						local timeout = os.clock()
-						while State.Carrying and State.AutoLoading and (os.clock() - timeout < Config.ActionDelay * 13) do task.wait(Config.LoopWait / 2) end
+						while State.Carrying and State.AutoLoading and (os.clock() - timeout < 2.0) do task.wait(0.1) end
 						State.IsBusy = false
 						task.wait(Config.ActionDelay)
 					else
@@ -481,8 +484,8 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					local hum, hrp = GetValidHumanoid()
 					local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
-					-- 1. FASE MENYETIR KE ATM MENGGUNAKAN DRIVE ENGINE
-					if not State.Carrying and State.TargetPos and distToAtm > 35 then
+					-- 1. FASE MENYETIR KE ATM
+					if not State.Carrying and State.TargetPos and distToAtm > 45 then
 						State.IsBusy = true
 
 						if DriveEngine and not DriveEngine.IsDriving() then
@@ -508,15 +511,13 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					if not State.AutoDelivering then break end
 
 					-- 2. FASE AMBIL KOPER DARI BAGASI
-					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 55 then
+					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 60 then
 						State.IsBusy = true
-						Utils.SafeTeleportChar(bagasiPoint.CFrame * CFrame.new(0, 0, 1.8), Config.ActionDelay)
-						task.wait(0.2)
-						Utils.TriggerPrompt(ambilPrompt, bagasiPoint, true)
+						RemoteTriggerPrompt(ambilPrompt)
 
 						local waitCarry = os.clock()
-						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < Config.ActionDelay * 12) do 
-							task.wait(Config.LoopWait / 2) 
+						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < 2.5) do 
+							task.wait(0.1) 
 						end
 						State.IsBusy = false
 						task.wait(Config.ActionDelay)
@@ -524,38 +525,18 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 					if not State.AutoDelivering then break end
 
-					-- 3. FASE ISI KOPER KE ATM (DENGAN ANTI-COLLISION & HITBOX POSITIONING)
-					if State.Carrying and State.TargetPos then
+					-- 3. FASE ISI KOPER KE ATM (MURNI REMOTE EVENT TANPA TELEPORTASI KE MESIN)
+					if State.Carrying then
 						State.IsBusy = true
-						DisableATMCollisions()
+						task.wait(0.2)
 
-						local curHum, curHrp = GetValidHumanoid()
-						
-						-- Teleportasi tepat di depan ATM tanpa melayang (ketinggian tanah sejajar)
-						if curHrp then
-							curHrp.AssemblyLinearVelocity = Vector3.zero
-							curHrp.AssemblyAngularVelocity = Vector3.zero
-							curHrp.CFrame = CFrame.new(State.TargetPos.X, State.TargetPos.Y, State.TargetPos.Z)
+						if Network then 
+							Network:FireServer("BankCourier", "FillStart") 
 						end
-						
-						task.wait(Config.ActionDelay)
-
-						-- Matikan bentrokan karakter sementara waktu
-						for _, p in ipairs(LocalPlayer.Character:GetDescendants()) do
-							if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-								p.CanCollide = false
-							end
-						end
-
-						if Network then Network:FireServer("BankCourier", "FillStart") end
 
 						local waitFill = os.clock()
-						while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 25) do 
-							if curHrp then
-								curHrp.AssemblyLinearVelocity = Vector3.zero
-								curHrp.AssemblyAngularVelocity = Vector3.zero
-							end
-							task.wait(Config.LoopWait / 2) 
+						while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < 8.0) do 
+							task.wait(0.2) 
 						end
 
 						State.IsBusy = false
@@ -588,10 +569,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		pcall(function()
 			local hum, hrp = GetValidHumanoid()
 			if hum and hum.Sit then hum.Sit = false end
-			if hrp then 
-				hrp.Anchored = false 
-				hrp.AssemblyLinearVelocity = Vector3.zero
-			end
+			if hrp then hrp.Anchored = false end
 			local car = GetPlayerCar()
 			if car and car.PrimaryPart then car.PrimaryPart.Anchored = false end
 		end)
@@ -608,7 +586,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	local ControlsSection = BCATab:Section({ Title = "Auto Farm Controls", Opened = true })
 	local DashboardSection = BCATab:Section({ Title = "Floating Mini Dashboard", Opened = true })
 	local SettingsSection = BCATab:Section({ Title = "Konfigurasi Drive Engine", Opened = true })
-	local ShortcutsSection = BCATab:Section({ Title = "Pintasan Teleport", Opened = true })
 
 	DashboardSection:Button({
 		Title = "Toggle Floating Dashboard (BCA Pocket)",
@@ -630,38 +607,9 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		end
 	})
 
-	ShortcutsSection:Button({
-		Title = "Teleport ke NPC Start (Lobby)",
-		Callback = function()
-			local Mf = GetBcaFolder()
-			local StartNpc = Mf and Mf:FindFirstChild("NPC_START_JOB")
-			if StartNpc then Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay) end
-		end
-	})
-
-	ShortcutsSection:Button({
-		Title = "Teleport ke Spawner Mobil",
-		Callback = function()
-			local Mf = GetBcaFolder()
-			local CarSpawner = Mf and Mf:FindFirstChild("CAR_SPAWNER_NPC")
-			if CarSpawner then Utils.SafeTeleportChar(CarSpawner:GetPivot(), Config.ActionDelay) end
-		end
-	})
-
-	ShortcutsSection:Button({
-		Title = "Teleport ke Rak Koper",
-		Callback = function()
-			local Mf = GetBcaFolder()
-			local jobFolder = Mf and Mf:FindFirstChild("Job")
-			local bankCourier = jobFolder and jobFolder:FindFirstChild("BankCourier")
-			local KoperSpawn = bankCourier and bankCourier:FindFirstChild("KoperSpawn")
-			if KoperSpawn then Utils.SafeTeleportChar(KoperSpawn:GetPivot(), Config.ActionDelay) end
-		end
-	})
-
 	autoFarmToggle = ControlsSection:Toggle({
 		Title = "Endless Auto Farm",
-		Desc = "Mulai/Hentikan siklus kurir otomatis.",
+		Desc = "Mulai siklus kurir instan tanpa teleportasi berisiko.",
 		Value = false,
 		Callback = function(active)
 			if State.AutoFarmActive == active then return end
@@ -678,14 +626,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 			State.AutoFarmActive = active
 			if active then
-				print("🚀 [AutoFarm] Memulai Safe Platform & Membersihkan Map...")
+				print("🚀 [AutoFarm] Memulai Auto Farm BCA Courier...")
 				if Utils.DestroyHeavyMaps then
 					Utils.DestroyHeavyMaps()
 				elseif Utils.StartGiantPlatform then
 					Utils.StartGiantPlatform()
 				end
-
-				DisableATMCollisions()
 
 				task.spawn(function()
 					print("▶️ [AutoFarm] Siklus Loop BCA Courier Dimulai...")
@@ -729,7 +675,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 						end
 						if not State.AutoFarmActive then break end
 
-						-- Return car kembali ke spawner
+						-- Kembali ke Spawner
 						local returnCar = GetPlayerCar()
 						local Mf = GetBcaFolder()
 						local CarSpawner = Mf and Mf:FindFirstChild("CAR_SPAWNER_NPC")
@@ -747,14 +693,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 						end
 						if not State.AutoFarmActive then break end
 
+						-- Finish Job via Remote
 						local StartNpc = Mf and Mf:FindFirstChild("NPC_START_JOB")
 						if StartNpc then
-							Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
-							task.wait(0.5)
-
 							local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
-							if prompt then prompt.Enabled = true end
-							Utils.TriggerPrompt(prompt, StartNpc.PrimaryPart or StartNpc:FindFirstChildWhichIsA("BasePart"))
+							if prompt then RemoteTriggerPrompt(prompt) end
+							if NpcDialogEvent then NpcDialogEvent:FireServer("Finish", nil) end
 						end
 
 						local endWait = os.clock()
@@ -770,7 +714,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					Action_ResetAll()
 				end)
 			else
-				print("🛑 [AutoFarm] Menghentikan botting & platform.")
+				print("🛑 [AutoFarm] Menghentikan botting.")
 				Action_ResetAll()
 				if Utils.StopGiantPlatform then
 					Utils.StopGiantPlatform()
