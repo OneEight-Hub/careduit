@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (100% REVERSED & SYNCED WITH OFFICIAL GAME CLIENT)
+-- CDID HUB - BCA COURIER (ANTI-RACE CONDITION & SINGLE-ROUND LOCK)
 -- ==============================================================================
 local BCA = {}
 
@@ -61,6 +61,10 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	local NpcDialogEvent = nil
 	local JobRemote = nil
 	local FloatingDash = nil
+
+	-- ANTI-RACE CONDITION TOKENS
+	local CurrentLoadToken = 0
+	local IsMinigameActive = false
 
 	-- ==============================================================================
 	-- HELPER FUNCTIONS
@@ -135,12 +139,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 		if fireproximityprompt then
 			fireproximityprompt(prompt)
+		else
+			local duration = prompt.HoldDuration or 0.2
+			prompt:InputHoldBegin()
+			task.wait(duration + 0.1)
+			prompt:InputHoldEnd()
 		end
-
-		local duration = prompt.HoldDuration or 0.2
-		prompt:InputHoldBegin()
-		task.wait(duration + 0.1)
-		prompt:InputHoldEnd()
 	end
 
 	local function ResetPlayerCamera()
@@ -170,7 +174,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		return nil
 	end
 
-	-- PROMPT BAGASI RESMI GAME
 	local function GetMuatPrompt(bagasiPoint)
 		if not bagasiPoint then return nil end
 		for _, p in ipairs(bagasiPoint:GetDescendants()) do
@@ -347,37 +350,45 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 			elseif action == "Koper" then
 				State.Loaded = arg1
 				State.Carrying = (arg4 == true)
+				if not State.Carrying then
+					IsMinigameActive = false
+				end
 
 			-- ======================================================================
-			-- SINKRONISASI MINIGAME LOAD KOPER (LOADROUND)
-			-- ======================================================================
-			-- ======================================================================
-			-- SINKRONISASI MINIGAME LOAD KOPER (ANTI-TOO-EARLY / 100% GREEN ZONE)
+			-- SINKRONISASI LOAD KOPER DENGAN SINGLE ROUND TOKEN LOCK
 			-- ======================================================================
 			elseif action == "LoadRound" and typeof(arg1) == "table" then
+				CurrentLoadToken = CurrentLoadToken + 1
+				local thisToken = CurrentLoadToken
+				IsMinigameActive = true
+
 				local greenStart = arg1.greenStart or 0.4
 				local greenSize = arg1.greenSize or 0.2
 				local period = math.max(arg1.period or 1.0, 0.1)
 
-				-- Target di 55% lebar zona hijau (sedikit lewat tengah agar tidak kena batas awal)
+				-- Target di 55% lebar zona hijau
 				local targetProgress = greenStart + (greenSize * 0.55)
-
-				-- Waktu tempuh murni dari 0 ke targetProgress
 				local delayTime = targetProgress * period
 
-				-- Beri safety offset minimal 0.22 detik agar server siap menerima input
-				if delayTime < 0.22 then
-					-- Jika zona hijau terlalu di depan (misal 0.1), tunggu putaran balik (2 - targetProgress)
+				if delayTime < 0.25 then
 					delayTime = (2 - targetProgress) * period
 				end
 
 				local curSession = Context.Session
 				task.delay(delayTime, function()
-					if _G.MainCoreSession ~= curSession then return end
-					if Network then
-						Network:FireServer("BankCourier", "LoadPress")
+					-- Hanya jalankan jika sesi dan token ronde masih cocok (Anti Double Input)
+					if _G.MainCoreSession == curSession and CurrentLoadToken == thisToken and IsMinigameActive then
+						if Network then
+							Network:FireServer("BankCourier", "LoadPress")
+						end
 					end
 				end)
+
+			elseif action == "LoadResult" then
+				-- Jika sukses atau ronde selesai, reset status minigame
+				if arg1 == true or State.Loaded >= State.Total then
+					IsMinigameActive = false
+				end
 
 			-- ======================================================================
 			-- SINKRONISASI MINIGAME ATM (SKILLCHECK)
@@ -411,12 +422,14 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 			elseif action == "Complete" or action == "Returning" then
 				State.Phase = "Returning"
+				IsMinigameActive = false
 
 			elseif action == "Stop" then
 				State.Phase = "Unemployee"
 				State.Loaded = 0
 				State.Total = 0
 				State.TotalTrips = State.TotalTrips + 1
+				IsMinigameActive = false
 
 				if State.TripStartTime then
 					State.LastTripDuration = os.clock() - State.TripStartTime
@@ -506,7 +519,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
 				local koperPrompt = KoperSpawn:FindFirstChildWhichIsA("ProximityPrompt", true)
 
-				-- 1. Ambil koper dari rak
+				-- 1. Ambil koper dari rak (Sekali Trigger)
 				if not State.Carrying and not State.IsBusy then
 					State.IsBusy = true
 					SafeTeleportInFront(KoperSpawn:GetPivot(), 2.8)
@@ -518,7 +531,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					end
 					State.IsBusy = false
 
-				-- 2. Muat koper ke bagasi
+				-- 2. Muat koper ke bagasi (Sekali Trigger, Jangan Spam!)
 				elseif State.Carrying and not State.IsBusy then
 					if bagasiPoint then
 						State.IsBusy = true
@@ -531,14 +544,12 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 						local muatPrompt = GetMuatPrompt(bagasiPoint)
 						if muatPrompt then
-							TriggerPrompt(muatPrompt)
+							TriggerPrompt(muatPrompt) -- Dipanggil sekali saja
 						end
 
+						-- Tunggu sampai minigame selesai dan koper lepas dari tangan
 						local timeout = os.clock()
-						while State.Carrying and State.AutoLoading and (os.clock() - timeout < 3.0) do 
-							if muatPrompt and State.Carrying then
-								TriggerPrompt(muatPrompt)
-							end
+						while State.Carrying and State.AutoLoading and (os.clock() - timeout < 4.0) do 
 							task.wait(0.2) 
 						end
 						State.IsBusy = false
@@ -626,9 +637,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 						local waitCarry = os.clock()
 						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < 3.5) do 
-							if ambilPrompt and not State.Carrying then
-								TriggerPrompt(ambilPrompt)
-							end
 							task.wait(0.2) 
 						end
 						State.IsBusy = false
@@ -637,7 +645,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 					if not State.AutoDelivering then break end
 
-					-- 3. FASE ISI KOPER KE ATM (MURNI REMOTE EVENT LANGSUNG)
+					-- 3. FASE ISI KOPER KE ATM VIA REMOTE
 					if State.Carrying then
 						State.IsBusy = true
 						task.wait(0.2)
@@ -672,6 +680,8 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		State.Loaded = 0
 		State.Total = 0
 		State.TripStartTime = nil
+		CurrentLoadToken = 0
+		IsMinigameActive = false
 
 		ResetPlayerCamera()
 		RestoreCharacterPhysics()
@@ -718,7 +728,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 	autoFarmToggle = ControlsSection:Toggle({
 		Title = "Endless Auto Farm",
-		Desc = "Mulai siklus kurir bulletproof.",
+		Desc = "Mulai siklus kurir bulletproof tanpa race condition.",
 		Value = false,
 		Callback = function(active)
 			if State.AutoFarmActive == active then return end
