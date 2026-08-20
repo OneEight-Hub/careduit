@@ -33,7 +33,7 @@ local function EnsurePlatformPart()
 		GiantPlatform.Size = Vector3.new(500, 2, 500)
 		GiantPlatform.Anchored = true
 		GiantPlatform.CanCollide = true
-		GiantPlatform.Transparency = 1 -- 1 untuk transparan total
+		GiantPlatform.Transparency = 0 -- 1 untuk transparan total
 		GiantPlatform.Material = Enum.Material.SmoothPlastic
 		GiantPlatform.TopSurface = Enum.SurfaceType.Smooth
 		GiantPlatform.Parent = Workspace
