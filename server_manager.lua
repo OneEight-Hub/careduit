@@ -1,185 +1,187 @@
 -- ==============================================================================
--- CDID HUB - PRIVATE SERVER MANAGER (INSTANT REPLICA HOOK)
+-- CDID HUB - DYNAMIC SERVER & MAP MANAGER
 -- ==============================================================================
 local ServerManager = {}
 
 function ServerManager.Init(Window, Utils, Context)
+	local TeleportService = game:GetService("TeleportService")
 	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local HttpService = game:GetService("HttpService")
 	local Players = game:GetService("Players")
 	local LocalPlayer = Players.LocalPlayer
 
-	local CurrentCode = ""
-	local ServerMapData = {}
-	local codeParagraph
+	-- 1. LOAD MODUL TELEPORT BAWAAN CDID SECARA DINAMIS
+	local CDID_TeleportModule = nil
+	local SharedFolder = ReplicatedStorage:WaitForChild("Shared", 5)
+	local TeleportScript = SharedFolder and SharedFolder:WaitForChild("Teleport", 5)
 
-	-- ==============================================================================
-	-- 1. INSTANT REPLICA REMOTE EVENT LISTENER (LOBBY & IN-GAME)
-	-- ==============================================================================
-	local function UpdateServerData(data)
-		if typeof(data) ~= "table" then return end
-		
-		if data.Code and tostring(data.Code) ~= "" then
-			CurrentCode = tostring(data.Code)
-			ServerMapData = data
-			print("🔑 [Private Server] Kode berhasil diperbarui:", CurrentCode)
-			if codeParagraph then
-				pcall(function()
-					codeParagraph:SetDesc("🔑 Kode Aktif: " .. CurrentCode)
-				end)
+	if TeleportScript then
+		local ok, mod = pcall(require, TeleportScript)
+		if ok and mod then
+			CDID_TeleportModule = mod
+			print("✅ [Server Manager] Berhasil me-load ReplicatedStorage.Shared.Teleport")
+		end
+	end
+
+	-- 2. AMBIL LIST MAP RESMI DARI MODUL GAME (DENGAN FALLBACK)
+	local MapDictionary = {}      -- { ["JAKARTA"] = { PlaceId = ..., Key = "Jakarta" } }
+	local MapNamesDisplay = {}    -- { "BALI", "BANDUNG", "JAKARTA", ... }
+	local defaultSelected = ""
+
+	local function RefreshMapData()
+		MapDictionary = {}
+		MapNamesDisplay = {}
+
+		local rawList = nil
+		if CDID_TeleportModule and CDID_TeleportModule.GetMapList then
+			pcall(function()
+				rawList = CDID_TeleportModule.GetMapList()
+			end)
+		end
+
+		-- Jika modul CDID berhasil dibaca
+		if rawList and type(rawList) == "table" then
+			for mapKey, mapInfo in pairs(rawList) do
+				local displayName = mapInfo.Name or mapKey:upper()
+				MapDictionary[displayName] = {
+					Key = mapKey,
+					PlaceId = mapInfo.PlaceId,
+					Image = mapInfo.Image
+				}
+				table.insert(MapNamesDisplay, displayName)
+			end
+		else
+			-- Fallback hardcoded jika modul gagal di-require
+			warn("⚠️ [Server Manager] Gagal require Teleport module, menggunakan data fallback.")
+			local fallbackMaps = {
+				["JAKARTA"]     = { Key = "Jakarta", PlaceId = 14005966837 },
+				["BANDUNG"]     = { Key = "Bandung", PlaceId = 79488788685813 },
+				["JAWA BARAT"]  = { Key = "JawaBarat", PlaceId = 9233343468 },
+				["JAWA TENGAH"] = { Key = "JawaTengah", PlaceId = 9508940498 },
+				["BALI"]        = { Key = "Bali", PlaceId = 118108582994420 },
+				["JAWA TIMUR"]  = { Key = "JawaTimur", PlaceId = 110369730911937 },
+				["SEASONAL"]    = { Key = "Seasonal", PlaceId = 132986577553100 }
+			}
+			for name, data in pairs(fallbackMaps) do
+				MapDictionary[name] = data
+				table.insert(MapNamesDisplay, name)
 			end
 		end
+
+		table.sort(MapNamesDisplay)
+		defaultSelected = MapNamesDisplay[1] or "JAKARTA"
 	end
 
-	-- Hook langsung ke ReplicaRemoteEvents (Sangat cepat menangkap hasil Generate/Join)
-	local replicaEvents = ReplicatedStorage:WaitForChild("ReplicaRemoteEvents", 10)
-	if replicaEvents then
-		local setValueEvent = replicaEvents:WaitForChild("Replica_ReplicaSetValue", 10)
-		if setValueEvent then
-			local hook1 = setValueEvent.OnClientEvent:Connect(function(replicaId, path, value)
-				if typeof(path) == "table" and path[1] == "PrivateServer" then
-					UpdateServerData(value)
-				end
-			end)
-			table.insert(Context.Hooks, hook1)
-		end
+	RefreshMapData()
 
-		local setValuesEvent = replicaEvents:FindFirstChild("Replica_ReplicaSetValues")
-		if setValuesEvent then
-			local hook2 = setValuesEvent.OnClientEvent:Connect(function(replicaId, path, values)
-				if typeof(path) == "table" and path[1] == "PrivateServer" then
-					UpdateServerData(values)
-				end
-			end)
-			table.insert(Context.Hooks, hook2)
-		end
-	end
-
-	-- Backup via ReplicaController bila sudah masuk gameplay
-	task.spawn(function()
-		while not ReplicatedStorage:FindFirstChild("ClientContainer") do
-			task.wait(2)
-			if Context.Session ~= _G.MainCoreSession then return end
-		end
-
-		local ok, RC = pcall(function()
-			return require(ReplicatedStorage.ClientContainer.Controller.ReplicaController)
-		end)
-
-		if ok and RC then
-			RC.ReplicaOfClassCreated("Player_" .. LocalPlayer.UserId, function(replica)
-				if replica.Data and replica.Data.PrivateServer then
-					UpdateServerData(replica.Data.PrivateServer)
-				end
-
-				replica:ListenToChange({"PrivateServer"}, function(newVal)
-					UpdateServerData(newVal)
-				end)
-			end)
-		end
-	end)
+	local currentSelectedName = defaultSelected
 
 	-- ==============================================================================
-	-- 2. UI SETUP
+	-- UI WINDUI TAB SETUP
 	-- ==============================================================================
 	local ServerTab = Window:Tab({
 		Title = "Server Manager",
 		Icon = "solar:server-square-bold"
 	})
 
-	local CodeSection = ServerTab:Section({ Title = "Kode Private Server" })
-	local JoinSection = ServerTab:Section({ Title = "Pilih Map Tujuan (Auto Join)" })
+	local MapSection = ServerTab:Section({ Title = "Pilihan & Pindah Map CDID (Dynamic)" })
+	local ServerSection = ServerTab:Section({ Title = "Kontrol Server" })
 
-	codeParagraph = CodeSection:Paragraph({
-		Title = "Kode Aktif",
-		Desc = "⚠️ Belum ada kode (Klik Generate atau Input manual)",
-		Image = "key"
+	-- DROPDOWN DINAMIS (Mengambil dari ReplicatedStorage.Shared.Teleport)
+	local mapDropdown = MapSection:Dropdown({
+		Title = "Pilih Map Tujuan",
+		Desc = "Daftar map disinkronkan otomatis langsung dari data CDID.",
+		Values = MapNamesDisplay,
+		Value = currentSelectedName,
+		Callback = function(chosen)
+			currentSelectedName = chosen
+			local info = MapDictionary[chosen]
+			if info then
+				print(string.format("🗺️ [Map Manager] Map: %s | Key: %s | PlaceId: %s", chosen, tostring(info.Key), tostring(info.PlaceId)))
+			end
+		end
 	})
 
-	CodeSection:Button({
-		Title = "Generate Kode Server Baru",
-		Desc = "Membuat server private baru via Remote.",
+	-- TOMBOL PINDAH MAP RESMI
+	MapSection:Button({
+		Title = "Pindah ke Map Terpilih",
+		Desc = "Teleport menggunakan alur resmi bawaan game CDID.",
 		Callback = function()
-			local netContainer = ReplicatedStorage:FindFirstChild("NetworkContainer")
-			local remoteEvents = netContainer and netContainer:FindFirstChild("RemoteEvents")
-			local psRemote = remoteEvents and remoteEvents:FindFirstChild("PrivateServer")
-			if psRemote then
-				print("📡 [Private Server] Mengirim request pembuatan kode baru...")
-				psRemote:FireServer("Create")
-			else
-				warn("⚠️ [Private Server] Remote PrivateServer belum ditemukan.")
+			local targetInfo = MapDictionary[currentSelectedName]
+			if not targetInfo then return end
+
+			print("🚀 [Map Manager] Menghubungkan ke map:", currentSelectedName)
+
+			-- Opsi 1: Panggil fungsi asli game (Memunculkan layar loading custom CDID)
+			if CDID_TeleportModule and CDID_TeleportModule.TeleporToPublicServer then
+				local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+				local ok = pcall(function()
+					CDID_TeleportModule.TeleporToPublicServer(targetInfo.Key, pGui, LocalPlayer)
+				end)
+				if ok then return end
 			end
+
+			-- Opsi 2: Fallback Teleport Standar Roblox jika metode in-game gagal
+			pcall(function()
+				TeleportService:Teleport(targetInfo.PlaceId, LocalPlayer)
+			end)
 		end
 	})
 
-	CodeSection:Input({
-		Title = "Input / Ubah Kode Manual",
-		Desc = "Tempel kode jika ingin join server teman/kode lama.",
-		Value = CurrentCode,
-		Placeholder = "Masukkan kode private server...",
-		Callback = function(val)
-			if val and val ~= "" then
-				CurrentCode = val:gsub("%s+", "")
-				print("✏️ [Private Server] Kode manual diset ke:", CurrentCode)
-				if codeParagraph then
-					codeParagraph:SetDesc("🔑 Kode Aktif: " .. CurrentCode)
-				end
+	-- TOMBOL REFRESH LIST MAP
+	MapSection:Button({
+		Title = "Refresh Daftar Map",
+		Desc = "Muat ulang daftar map dari game tanpa inject ulang script.",
+		Callback = function()
+			RefreshMapData()
+			if mapDropdown and mapDropdown.SetValues then
+				mapDropdown:SetValues(MapNamesDisplay)
 			end
+			print("🔄 [Map Manager] Daftar map berhasil diperbarui.")
 		end
 	})
 
-	if setclipboard then
-		CodeSection:Button({
-			Title = "Salin Kode Aktif ke Clipboard",
-			Desc = "Copy kode untuk dibagikan ke teman.",
-			Callback = function()
-				if CurrentCode ~= "" then
-					setclipboard(CurrentCode)
-					print("📋 [Private Server] Kode berhasil disalin:", CurrentCode)
-				else
-					warn("⚠️ [Private Server] Tidak ada kode untuk disalin.")
+	-- REJOIN SERVER
+	ServerSection:Button({
+		Title = "Rejoin Server Ini",
+		Desc = "Masuk kembali ke server saat ini.",
+		Callback = function()
+			pcall(function()
+				TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+			end)
+		end
+	})
+
+	-- SERVER HOP
+	ServerSection:Button({
+		Title = "Server Hop (Cari Server Lain)",
+		Desc = "Mencari server publik lain yang masih memiliki slot kosong.",
+		Callback = function()
+			task.spawn(function()
+				print("🔍 [Server Manager] Mencari server alternatif...")
+				local placeId = game.PlaceId
+				local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", placeId)
+				local success, result = pcall(function()
+					return game:HttpGet(url)
+				end)
+
+				if success and result then
+					local data = HttpService:JSONDecode(result)
+					if data and data.data then
+						for _, s in ipairs(data.data) do
+							if s.playing < s.maxPlayers and s.id ~= game.JobId then
+								print("🚀 [Server Manager] Menghubungkan ke Server ID:", s.id)
+								TeleportService:TeleportToPlaceInstance(placeId, s.id, LocalPlayer)
+								return
+							end
+						end
+					end
 				end
-			end
-		})
-	end
-
-	-- ==============================================================================
-	-- 3. JOIN ACTION
-	-- ==============================================================================
-	local function JoinMap(mapName)
-		if CurrentCode == "" or CurrentCode == nil then
-			warn("⚠️ Tidak ada kode private server! Klik 'Generate Kode' atau masukkan kode secara manual.")
-			return
+				warn("⚠️ [Server Manager] Gagal mencari server via API, melakukan teleport reguler...")
+				TeleportService:Teleport(placeId, LocalPlayer)
+			end)
 		end
-
-		local netContainer = ReplicatedStorage:FindFirstChild("NetworkContainer")
-		local remoteEvents = netContainer and netContainer:FindFirstChild("RemoteEvents")
-		local psRemote = remoteEvents and remoteEvents:FindFirstChild("PrivateServer")
-		if psRemote then
-			print(string.format("🚀 [Teleport] Menghubungkan ke %s | Kode: %s", mapName, CurrentCode))
-			psRemote:FireServer("Join", CurrentCode, mapName)
-		else
-			warn("⚠️ [Private Server] Remote PrivateServer tidak ditemukan.")
-		end
-	end
-
-	local Maps = {
-		{ Name = "Jakarta", Desc = "Server Kota Jakarta & Sekitarnya" },
-		{ Name = "JawaBarat", Desc = "Server Jawa Barat" },
-		{ Name = "JawaTengah", Desc = "Server Jawa Tengah" },
-		{ Name = "JawaTimur", Desc = "Server Jawa Timur" },
-		{ Name = "Bali", Desc = "Server Pulau Bali" },
-		{ Name = "Seasonal", Desc = "Server Event / Musiman" }
-	}
-
-	for _, map in ipairs(Maps) do
-		JoinSection:Button({
-			Title = "Join Map: " .. map.Name,
-			Desc = map.Desc,
-			Callback = function()
-				JoinMap(map.Name)
-			end
-		})
-	end
+	})
 end
 
 return ServerManager
