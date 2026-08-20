@@ -368,33 +368,54 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				State.Loaded = arg1
 				State.Carrying = (arg4 == true)
 
+			-- ======================================================================
+			-- TIMING PERBAIKAN: MINIGAME MUAT KOPER (LOADROUND)
+			-- ======================================================================
 			elseif action == "LoadRound" and typeof(arg1) == "table" then
-				local greenSize = arg1.greenSize or arg1.greatSize or 0.18
-				local greenStart = arg1.greenStart or 0.5
-				local period = math.max(arg1.period or 1, 0.1)
-				local centerGreen = greenStart + (greenSize / 2)
+				local greenStart = arg1.greenStart or arg1.zoneStart or 0.5
+				local greenSize = arg1.greenSize or arg1.greatSize or 0.2
+				local period = math.max(arg1.period or arg1.speed or 1.0, 0.1)
+				local startLead = arg1.startLead or arg1.warnLead or 0 -- Delay animasi pembuka
+
+				-- Target tepat di tengah area hijau
+				local targetProgress = greenStart + (greenSize * 0.5)
+
+				-- Kompensasi Latency/Ping
 				local ping = 0
 				pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
-				local delayTime = (centerGreen * period) - ping - 0.01
-				if centerGreen > 0.65 then delayTime = delayTime + (period * 0.04) end
-				while delayTime < 0.03 do delayTime = delayTime + (2 * period) end
+
+				-- Hitung waktu tunggu yang presisi
+				local delayTime = startLead + (targetProgress * period) - ping
+
+				-- Jika timing terlewat di siklus pertama, lempar ke siklus osilasi berikutnya
+				while delayTime < 0.05 do
+					delayTime = delayTime + period
+				end
 
 				local curSession = Context.Session
 				task.delay(delayTime, function()
 					if _G.MainCoreSession ~= curSession then return end
-					Network:FireServer("BankCourier", "LoadPress")
+					if Network then
+						Network:FireServer("BankCourier", "LoadPress")
+					end
 				end)
 
+			-- ======================================================================
+			-- TIMING PERBAIKAN: MINIGAME ATM SKILLCHECK
+			-- ======================================================================
 			elseif action == "SkillCheck" and typeof(arg1) == "table" then
-				local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
-				local targetAngle = arg1.zoneStart + (zoneWidth / 2)
-				local speed = arg1.speed or 1
-				local warnLead = arg1.warnLead or 0
+				local zoneStart = arg1.zoneStart or 0
+				local zoneWidth = arg1.greatSize or arg1.zoneSize or 25
+				local targetAngle = zoneStart + (zoneWidth * 0.5)
+				local speed = arg1.speed or 180 -- Kecepatan derajat per detik
+				local warnLead = arg1.warnLead or 0.2
+
 				local ping = 0
 				pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
+
 				local delayTime = warnLead + (targetAngle / speed) - ping
 				local rotations = 0
-				while delayTime < 0.03 do
+				while delayTime < 0.05 do
 					delayTime = delayTime + (360 / speed)
 					rotations = rotations + 1
 				end
@@ -403,7 +424,9 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				local curSession = Context.Session
 				task.delay(delayTime, function()
 					if _G.MainCoreSession ~= curSession then return end
-					Network:FireServer("BankCourier", "SkillPress", angleToSend)
+					if Network then
+						Network:FireServer("BankCourier", "SkillPress", angleToSend)
+					end
 				end)
 
 			elseif action == "Complete" or action == "Returning" then
