@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - DYNAMIC SERVER & PRIVATE SERVER MANAGER
+-- CDID HUB - DYNAMIC SERVER & PRIVATE SERVER MANAGER (AUTO-SYNC GAME CODE)
 -- ==============================================================================
 local ServerManager = {}
 
@@ -10,7 +10,7 @@ function ServerManager.Init(Window, Utils, Context)
 	local Players = game:GetService("Players")
 	local LocalPlayer = Players.LocalPlayer
 
-	-- 1. LOAD MODUL TELEPORT & NETWORK BAWAAN CDID
+	-- 1. LOAD MODUL TELEPORT & NETWORK CDID
 	local CDID_TeleportModule = nil
 	local CDID_Network = nil
 
@@ -56,7 +56,7 @@ function ServerManager.Init(Window, Utils, Context)
 				table.insert(MapNamesDisplay, displayName)
 			end
 		else
-			-- Fallback hardcoded
+			-- Fallback data
 			local fallbackMaps = {
 				["JAKARTA"]     = { Key = "Jakarta", PlaceId = 14005966837 },
 				["BANDUNG"]     = { Key = "Bandung", PlaceId = 79488788685813 },
@@ -79,7 +79,59 @@ function ServerManager.Init(Window, Utils, Context)
 	RefreshMapData()
 
 	local currentSelectedName = defaultSelected
-	local inputPrivateCode = ""
+	local activeServerCode = ""
+
+	-- UI Elements Referensi
+	local codeInputControl = nil
+	local serverCodeParagraph = nil
+
+	-- ==============================================================================
+	-- 3. FUNGSI AUTO-DETECT KODE DARI GAME (TANPA SIMPAN FILE)
+	-- ==============================================================================
+	local function ApplyServerCode(code)
+		if not code or code == "" or code == "ServerLabel" or code == "nil" then return end
+		activeServerCode = tostring(code):gsub("%s+", "")
+
+		print("🔑 [Private Server] Kode aktif akun terdeteksi dari game:", activeServerCode)
+
+		if serverCodeParagraph then
+			pcall(function()
+				serverCodeParagraph:SetDesc("Kode Aktif Akun: " .. activeServerCode)
+			end)
+		end
+
+		if codeInputControl and codeInputControl.Set then
+			pcall(function()
+				codeInputControl:Set(activeServerCode)
+			end)
+		end
+	end
+
+	local function ScanExistingGameCode()
+		local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+		if not pGui then return false end
+
+		-- Scan ServerLabel di PlayerGui
+		for _, desc in ipairs(pGui:GetDescendants()) do
+			if desc.Name == "ServerLabel" and desc:IsA("TextLabel") and desc.Text ~= "" and desc.Text ~= "ServerLabel" then
+				ApplyServerCode(desc.Text)
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Hook Client Event dari Network CDID untuk menerima update kode realtime
+	if CDID_Network and CDID_Network.OnClientEvent then
+		local psHook = CDID_Network.OnClientEvent("PrivateServer", function(action, arg1)
+			if typeof(arg1) == "string" and arg1 ~= "" then
+				ApplyServerCode(arg1)
+			elseif typeof(action) == "string" and action:len() > 3 and not action:find("Join") then
+				ApplyServerCode(action)
+			end
+		end)
+		table.insert(Context.Hooks, psHook)
+	end
 
 	-- ==============================================================================
 	-- UI WINDUI TAB SETUP
@@ -98,7 +150,7 @@ function ServerManager.Init(Window, Utils, Context)
 	-- ==========================================
 	local mapDropdown = PublicMapSection:Dropdown({
 		Title = "Pilih Map Tujuan",
-		Desc = "Daftar map tersinkronisasi langsung dari modul resmi game.",
+		Desc = "Daftar map tersinkronisasi langsung dari modul game.",
 		Values = MapNamesDisplay,
 		Value = currentSelectedName,
 		Callback = function(chosen)
@@ -143,30 +195,37 @@ function ServerManager.Init(Window, Utils, Context)
 	-- ==========================================
 	-- B. PRIVATE SERVER SYSTEM
 	-- ==========================================
-	PrivateServerSection:Input({
+	serverCodeParagraph = PrivateServerSection:Paragraph({
+		Title = "Status Private Server",
+		Desc = "Kode Aktif Akun: Memeriksa dari game...",
+		Image = "key"
+	})
+
+	codeInputControl = PrivateServerSection:Input({
 		Title = "Kode Private Server",
-		Placeholder = "Masukkan kode private server...",
+		Placeholder = "Masukkan / tunggu kode otomatis...",
+		Value = activeServerCode,
 		Callback = function(val)
-			inputPrivateCode = tostring(val or ""):gsub("%s+", "")
+			activeServerCode = tostring(val or ""):gsub("%s+", "")
 		end
 	})
 
 	PrivateServerSection:Button({
 		Title = "Join Private Server",
-		Desc = "Masuk ke server private berdasarkan kode dan map yang dipilih di dropdown atas.",
+		Desc = "Masuk ke private server menggunakan kode di atas & map terpilih.",
 		Callback = function()
-			if inputPrivateCode == "" then
-				warn("⚠️ [Private Server] Masukkan kode server terlebih dahulu!")
+			if activeServerCode == "" then
+				warn("⚠️ [Private Server] Kode server belum ada! Silakan ambil atau buat terlebih dahulu.")
 				return
 			end
 
 			local targetInfo = MapDictionary[currentSelectedName]
 			local mapKey = targetInfo and targetInfo.Key or "Jakarta"
 
-			print(string.format("🔑 [Private Server] Mencoba Join Server Code: %s (Map: %s)...", inputPrivateCode, mapKey))
+			print(string.format("🔑 [Private Server] Join Server Code: %s (Map: %s)...", activeServerCode, mapKey))
 
 			if CDID_Network then
-				CDID_Network:FireServer("PrivateServer", "Join", tostring(inputPrivateCode), mapKey)
+				CDID_Network:FireServer("PrivateServer", "Join", tostring(activeServerCode), mapKey)
 			else
 				warn("⚠️ [Private Server] Module Network tidak ditemukan!")
 			end
@@ -174,14 +233,27 @@ function ServerManager.Init(Window, Utils, Context)
 	})
 
 	PrivateServerSection:Button({
-		Title = "Generate Kode Private Server Baru",
-		Desc = "Membuat kode server private baru milik akun kamu.",
+		Title = "Ambil / Buat Kode Server Milik Sendiri",
+		Desc = "Minta kode server akunmu dari game (otomatis buat baru jika belum pernah).",
 		Callback = function()
-			print("✨ [Private Server] Membuat Private Server baru...")
+			print("🔄 [Private Server] Mengambil/Generate kode private server dari server CDID...")
 			if CDID_Network then
 				CDID_Network:FireServer("PrivateServer", "Create")
 			else
 				warn("⚠️ [Private Server] Module Network tidak ditemukan!")
+			end
+		end
+	})
+
+	PrivateServerSection:Button({
+		Title = "Salin Kode ke Clipboard",
+		Desc = "Copy kode private server yang sedang aktif.",
+		Callback = function()
+			if activeServerCode ~= "" and setclipboard then
+				setclipboard(activeServerCode)
+				print("📋 [Clipboard] Kode server berhasil disalin:", activeServerCode)
+			else
+				warn("⚠️ [Clipboard] Belum ada kode server untuk disalin!")
 			end
 		end
 	})
@@ -228,6 +300,15 @@ function ServerManager.Init(Window, Utils, Context)
 			end)
 		end
 	})
+
+	-- Jalankan pemindaian kode game di background saat tab diinisialisasi
+	task.spawn(function()
+		task.wait(1.0)
+		local found = ScanExistingGameCode()
+		if not found and serverCodeParagraph then
+			serverCodeParagraph:SetDesc("Kode Aktif Akun: Belum dibuat / Belum terdeteksi")
+		end
+	end)
 end
 
 return ServerManager
