@@ -82,6 +82,10 @@ task.spawn(function()
 	end
 end)
 
+-- Load Safety & Detector Module
+local SafetyModule = _G.CDID_LoadModule("player_detector.lua")
+SafetyModule.Init(Window, Utils, Context)
+
 -- ==============================================================================
 -- LOAD FEATURE & JOB MODULES
 -- ==============================================================================
