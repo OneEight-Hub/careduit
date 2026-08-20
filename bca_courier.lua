@@ -1,0 +1,821 @@
+-- ==============================================================================
+-- CDID HUB - BCA COURIER (POWERED BY DRIVE ENGINE, TRIP STOPWATCH & DEEP SALDO SCAN)
+-- ==============================================================================
+local BCA = {}
+
+function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
+	local Players = game:GetService("Players")
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local Workspace = game:GetService("Workspace")
+	local LocalPlayer = Players.LocalPlayer
+
+	-- CONFIGURABLE VALUES
+	local Config = {
+		DriveSpeed = 180,
+		MinTravelDuration = 20,
+		ActionDelay = 0.3,
+		LoopWait = 0.4,
+		RestartDelay = 2.0,
+		FreezeCamera = true
+	}
+
+	-- STATE, FINANCIAL STATS & STOPWATCH
+	local State = {
+		Total = 0,
+		Loaded = 0,
+		Carrying = false,
+		Phase = "Unemployee",
+		TargetPos = nil,
+		IsBusy = false,
+
+		AutoFarmActive = false,
+		AutoLoading = false,
+		AutoDelivering = false,
+		LoadingActive = false,
+		DeliveryActive = false,
+
+		TotalTrips = 0,
+		TripStartTime = 0,
+		CurrentTripElapsed = 0,
+		LastTripDuration = 0,
+
+		-- Financial Analytics
+		StartSaldo = nil,
+		CurrentSaldo = 0,
+		LastGaji = 0,
+		EarnedSaldo = 0,
+
+		CurrentSaldoText = "Membaca...",
+		StartSaldoText = "Membaca...",
+		LastGajiText = "Rp 0",
+		EarnedText = "+Rp 0"
+	}
+
+	local autoFarmToggle
+	local statusParagraph
+	local timerParagraph
+	local Network = nil
+	local FloatingDash = nil
+
+	-- ==============================================================================
+	-- HELPER FUNCTIONS
+	-- ==============================================================================
+	local function FormatRupiah(val)
+		if type(val) ~= "number" then return tostring(val or "Rp 0") end
+		local r = string.format("%d", math.floor(val)):reverse():gsub("%d%d%d", "%1."):reverse():gsub("^%.", "")
+		return "Rp " .. r
+	end
+
+	local function ParseRupiahToNumber(str)
+		if type(str) == "number" then return str end
+		if type(str) ~= "string" then return 0 end
+		local clean = str:gsub("[^%d]", "")
+		return tonumber(clean) or 0
+	end
+
+	local function FormatTime(seconds)
+		seconds = math.floor(seconds or 0)
+		local mins = math.floor(seconds / 60)
+		local secs = seconds % 60
+		return string.format("%02d:%02d", mins, secs)
+	end
+
+	local function GetBcaFolder()
+		return Workspace:FindFirstChild("MY_BCA_COLLAB") 
+			or Workspace:FindFirstChild("MyBcaCollab") 
+			or Workspace:FindFirstChild("my_bca_collab")
+	end
+
+	local function GetValidHumanoid()
+		local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			return hum, char:FindFirstChild("HumanoidRootPart")
+		end
+		return nil, nil
+	end
+
+	local function ResetPlayerCamera()
+		if DriveEngine and DriveEngine.FreezeCamera then
+			DriveEngine.FreezeCamera(false)
+		end
+		local hum = GetValidHumanoid()
+		local camera = Workspace.CurrentCamera
+		if camera and hum then
+			camera.CameraType = Enum.CameraType.Custom
+			camera.CameraSubject = hum
+			camera.FieldOfView = 70
+		end
+	end
+
+	local function GetPlayerCar()
+		if DriveEngine and DriveEngine.GetPlayerCar then
+			return DriveEngine.GetPlayerCar()
+		end
+		local vehicles = Workspace:FindFirstChild("Vehicles")
+		if not vehicles then return nil end
+		for _, v in ipairs(vehicles:GetChildren()) do
+			if v.Name:find(LocalPlayer.Name, 1, true) then
+				return v
+			end
+		end
+		return nil
+	end
+
+	local function GetMuatPrompt(bagasiPoint)
+		if not bagasiPoint then return nil end
+		local prompt = bagasiPoint:FindFirstChild("MuatPrompt")
+		if prompt and prompt:IsA("ProximityPrompt") then return prompt end
+		for _, p in ipairs(bagasiPoint:GetChildren()) do
+			if p:IsA("ProximityPrompt") and p.Name ~= "AmbilPrompt" then return p end
+		end
+		return nil
+	end
+
+	local function GetAmbilPrompt(bagasiPoint)
+		if not bagasiPoint then return nil end
+		local prompt = bagasiPoint:FindFirstChild("AmbilPrompt")
+		if prompt and prompt:IsA("ProximityPrompt") then return prompt end
+		for _, p in ipairs(bagasiPoint:GetChildren()) do
+			if p:IsA("ProximityPrompt") and p.Name ~= "MuatPrompt" then return p end
+		end
+		return nil
+	end
+
+	-- ==============================================================================
+	-- ROBUST SALDO FETCHER (DEEP SCAN TO FIX "MEMBACA...")
+	-- ==============================================================================
+	local function FetchPocketSaldo()
+		task.spawn(function()
+			local netContainer = ReplicatedStorage:FindFirstChild("NetworkContainer")
+			local remoteEvents = netContainer and netContainer:FindFirstChild("RemoteEvents")
+			local appOpened = remoteEvents and remoteEvents:FindFirstChild("MyBcaAppOpened")
+
+			if appOpened then
+				pcall(function() appOpened:FireServer() end)
+			end
+
+			task.wait(0.5)
+
+			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+			if not pGui then return end
+
+			local rawText = nil
+
+			-- 1. Scan Phone GUI Spesifik
+			local phoneGui = pGui:FindFirstChild("ACTUAL NEW PHONE") or pGui:FindFirstChild("Phone")
+			if phoneGui then
+				for _, desc in ipairs(phoneGui:GetDescendants()) do
+					if desc:IsA("TextLabel") and desc.Text and desc.Text:find("Rp") then
+						local num = ParseRupiahToNumber(desc.Text)
+						if num > 0 then
+							rawText = desc.Text
+							break
+						end
+					end
+				end
+			end
+
+			-- 2. Fallback Deep-Scan seluruh PlayerGui
+			if not rawText then
+				for _, desc in ipairs(pGui:GetDescendants()) do
+					if desc:IsA("TextLabel") and desc.Text and desc.Text:find("Rp%s*[%d%.,]+") then
+						local num = ParseRupiahToNumber(desc.Text)
+						if num > 0 then
+							rawText = desc.Text
+							break
+						end
+					end
+				end
+			end
+
+			if rawText then
+				local parsedNum = ParseRupiahToNumber(rawText)
+				if parsedNum > 0 then
+					if not State.StartSaldo then
+						State.StartSaldo = parsedNum
+						State.StartSaldoText = FormatRupiah(parsedNum)
+					else
+						if parsedNum > State.CurrentSaldo and State.CurrentSaldo > 0 then
+							State.LastGaji = parsedNum - State.CurrentSaldo
+							State.LastGajiText = "+" .. FormatRupiah(State.LastGaji)
+						end
+					end
+
+					State.CurrentSaldo = parsedNum
+					State.CurrentSaldoText = FormatRupiah(parsedNum)
+
+					if State.StartSaldo then
+						State.EarnedSaldo = math.max(0, State.CurrentSaldo - State.StartSaldo)
+						State.EarnedText = "+" .. FormatRupiah(State.EarnedSaldo)
+					end
+
+					if FloatingDash then
+						FloatingDash.UpdateSaldoAwal(State.StartSaldoText)
+						FloatingDash.UpdateCurrentSaldo(State.CurrentSaldoText)
+						FloatingDash.UpdateEarned(State.EarnedText)
+						FloatingDash.UpdateGajiTerakhir(State.LastGajiText)
+					end
+				end
+			end
+
+			if phoneGui then pcall(function() phoneGui.Enabled = false end) end
+		end)
+	end
+
+	-- ==============================================================================
+	-- NETWORK HOOKS & EVENT LISTENERS
+	-- ==============================================================================
+	task.spawn(function()
+		while not GetBcaFolder() do
+			task.wait(1.5)
+			if Context.Session ~= _G.MainCoreSession then return end
+		end
+
+		FetchPocketSaldo()
+
+		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
+		local netModule = modules and modules:WaitForChild("Network", 15)
+		if netModule then Network = require(netModule) end
+
+		local netContainer = ReplicatedStorage:WaitForChild("NetworkContainer", 15)
+		local remoteEvents = netContainer and netContainer:WaitForChild("RemoteEvents", 15)
+		local NpcDialogEvent = remoteEvents and remoteEvents:WaitForChild("NpcDialog", 15)
+		local JobRemote = remoteEvents and remoteEvents:WaitForChild("Job", 15)
+
+		if not Network or not NpcDialogEvent or not JobRemote then return end
+
+		local dialogHook = NpcDialogEvent.OnClientEvent:Connect(function(action)
+			if action == "Start" then
+				task.spawn(function()
+					task.wait(0.5)
+					NpcDialogEvent:FireServer("Finish", nil)
+					if firesignal then pcall(firesignal, NpcDialogEvent.OnClientEvent, "Abort") end
+					ResetPlayerCamera()
+				end)
+			end
+		end)
+		table.insert(Context.Hooks, dialogHook)
+
+		local jobHook = JobRemote.OnClientEvent:Connect(function(action, arg1)
+			if action == "SetJob" then
+				if arg1 == "BankCourier" then
+					State.Phase = "Loading"
+				elseif arg1 == "Unemployee" then
+					State.Phase = "Unemployee"
+					State.Loaded = 0
+					State.Total = 0
+				end
+			end
+		end)
+		table.insert(Context.Hooks, jobHook)
+
+		local bankHook = Network.OnClientEvent("BankCourier", function(action, arg1, arg2, arg3, arg4)
+			if action == "Start" then
+				State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
+				State.Phase = "Loading"
+
+			elseif action == "Phase" then
+				State.Phase = arg1
+				if typeof(arg4) == "Vector3" then State.TargetPos = arg4
+				elseif typeof(arg2) == "Vector3" then State.TargetPos = arg2
+				elseif arg2 and arg2:IsA("BasePart") then State.TargetPos = arg2.Position end
+
+			elseif action == "Koper" then
+				State.Loaded = arg1
+				State.Carrying = (arg4 == true)
+
+			elseif action == "LoadRound" and typeof(arg1) == "table" then
+				local greenSize = arg1.greenSize or arg1.greatSize or 0.18
+				local greenStart = arg1.greenStart or 0.5
+				local period = math.max(arg1.period or 1, 0.1)
+				local centerGreen = greenStart + (greenSize / 2)
+				local ping = 0
+				pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
+				local delayTime = (centerGreen * period) - ping - 0.01
+				if centerGreen > 0.65 then delayTime = delayTime + (period * 0.04) end
+				while delayTime < 0.03 do delayTime = delayTime + (2 * period) end
+
+				local curSession = Context.Session
+				task.delay(delayTime, function()
+					if _G.MainCoreSession ~= curSession then return end
+					Network:FireServer("BankCourier", "LoadPress")
+				end)
+
+			elseif action == "SkillCheck" and typeof(arg1) == "table" then
+				local zoneWidth = arg1.greatSize or arg1.zoneSize or 20
+				local targetAngle = arg1.zoneStart + (zoneWidth / 2)
+				local speed = arg1.speed or 1
+				local warnLead = arg1.warnLead or 0
+				local ping = 0
+				pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
+				local delayTime = warnLead + (targetAngle / speed) - ping
+				local rotations = 0
+				while delayTime < 0.03 do
+					delayTime = delayTime + (360 / speed)
+					rotations = rotations + 1
+				end
+				local angleToSend = targetAngle + (rotations * 360)
+
+				local curSession = Context.Session
+				task.delay(delayTime, function()
+					if _G.MainCoreSession ~= curSession then return end
+					Network:FireServer("BankCourier", "SkillPress", angleToSend)
+				end)
+
+			elseif action == "Complete" or action == "Returning" then
+				State.Phase = "Returning"
+
+			elseif action == "Stop" then
+				State.Phase = "Unemployee"
+				State.Loaded = 0
+				State.Total = 0
+				State.TotalTrips = State.TotalTrips + 1
+
+				if State.TripStartTime > 0 then
+					State.LastTripDuration = os.clock() - State.TripStartTime
+					State.TripStartTime = 0
+				end
+
+				if FloatingDash then FloatingDash.UpdateTrips(State.TotalTrips) end
+				FetchPocketSaldo()
+			end
+		end)
+		table.insert(Context.Hooks, bankHook)
+	end)
+
+	-- ==============================================================================
+	-- AUTOFARM SEQUENCES
+	-- ==============================================================================
+	local function Action_StartJob()
+		local Mf = GetBcaFolder()
+		if not Mf then return end
+		local StartNpc = Mf:FindFirstChild("NPC_START_JOB")
+		if not StartNpc or State.Phase == "Loading" or State.Phase == "Delivering" then return end
+
+		print("📍 [Step 1] Teleport ke NPC Start Job...")
+		Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
+		task.wait(0.5)
+		local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
+		if prompt then prompt.Enabled = true end
+		Utils.TriggerPrompt(prompt, StartNpc.PrimaryPart or StartNpc:FindFirstChildWhichIsA("BasePart"))
+
+		local dialogWait = os.clock()
+		while State.Phase == "Unemployee" and (os.clock() - dialogWait < 4) do task.wait(0.1) end
+		task.wait(Config.ActionDelay)
+	end
+
+	local function Action_SpawnVehicle()
+		local Mf = GetBcaFolder()
+		if not Mf then return end
+		local CarSpawner = Mf:FindFirstChild("CAR_SPAWNER_NPC")
+		if not CarSpawner then return end
+
+		print("🚗 [Step 2] Teleport ke Spawner Mobil...")
+		Utils.SafeTeleportChar(CarSpawner:GetPivot(), Config.ActionDelay)
+		task.wait(0.5)
+		local spawnPrompt = CarSpawner:FindFirstChildWhichIsA("ProximityPrompt", true)
+		if spawnPrompt then spawnPrompt.Enabled = true end
+		Utils.TriggerPrompt(spawnPrompt, CarSpawner.PrimaryPart or CarSpawner:FindFirstChildWhichIsA("BasePart"))
+		task.wait(1.2)
+	end
+
+	local function RunLoadingLoop()
+		if State.LoadingActive then return end
+		State.LoadingActive = true
+		local Mf = GetBcaFolder()
+		if not Mf then return end
+		local jobFolder = Mf:FindFirstChild("Job")
+		local bankCourierFolder = jobFolder and jobFolder:FindFirstChild("BankCourier")
+		local KoperSpawn = bankCourierFolder and bankCourierFolder:FindFirstChild("KoperSpawn")
+		if not KoperSpawn then return end
+
+		task.spawn(function()
+			print("📦 [Step 3] Memuat koper ke bagasi...")
+			while State.AutoLoading do
+				if _G.MainCoreSession ~= Context.Session then break end
+				if State.Phase == "Delivering" or (State.Total > 0 and State.Loaded >= State.Total) then
+					State.AutoLoading = false
+					break
+				end
+
+				local car = GetPlayerCar()
+				local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
+				local muatPrompt = GetMuatPrompt(bagasiPoint)
+				local koperPrompt = KoperSpawn:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+				if not State.Carrying and not State.IsBusy then
+					State.IsBusy = true
+					Utils.SafeTeleportChar(KoperSpawn:GetPivot(), Config.ActionDelay)
+					Utils.TriggerPrompt(koperPrompt, KoperSpawn.PrimaryPart or KoperSpawn:FindFirstChildWhichIsA("BasePart"))
+					local timeout = os.clock()
+					while not State.Carrying and State.AutoLoading and (os.clock() - timeout < Config.ActionDelay * 10) do task.wait(Config.LoopWait / 2) end
+					State.IsBusy = false
+				elseif State.Carrying and not State.IsBusy then
+					if bagasiPoint and muatPrompt then
+						State.IsBusy = true
+						Utils.SafeTeleportChar(bagasiPoint.CFrame, Config.ActionDelay)
+						Utils.TriggerPrompt(muatPrompt, bagasiPoint, true)
+						local timeout = os.clock()
+						while State.Carrying and State.AutoLoading and (os.clock() - timeout < Config.ActionDelay * 13) do task.wait(Config.LoopWait / 2) end
+						State.IsBusy = false
+						task.wait(Config.ActionDelay)
+					else
+						task.wait(Config.LoopWait)
+					end
+				end
+				task.wait(Config.LoopWait)
+			end
+			State.LoadingActive = false
+		end)
+	end
+
+	local function RunDeliveryLoop()
+		if State.DeliveryActive then return end
+		State.DeliveryActive = true
+
+		task.spawn(function()
+			print("🏧 [Step 4] Memulai siklus pengantaran koper ke ATM...")
+			while State.AutoDelivering do
+				if _G.MainCoreSession ~= Context.Session then break end
+				if (State.Loaded <= 0 and not State.Carrying) or (State.Phase == "Returning" and State.Loaded <= 0) then
+					State.AutoDelivering = false
+					break
+				end
+
+				local car = GetPlayerCar()
+				local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
+				local ambilPrompt = GetAmbilPrompt(bagasiPoint)
+
+				if car and not State.IsBusy then
+					local hum, hrp = GetValidHumanoid()
+					local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
+
+					-- 1. FASE MENYETIR KE ATM MENGGUNAKAN DRIVE ENGINE
+					if not State.Carrying and State.TargetPos and distToAtm > 35 then
+						State.IsBusy = true
+
+						if DriveEngine and not DriveEngine.IsDriving() then
+							DriveEngine.DriveTo(State.TargetPos, {
+								Speed = Config.DriveSpeed,
+								MinDuration = Config.MinTravelDuration,
+								FreezeCam = Config.FreezeCamera,
+								StopCondition = function()
+									return not State.AutoDelivering or not State.AutoFarmActive or (_G.MainCoreSession ~= Context.Session)
+								end
+							})
+						end
+
+						-- Turun dari kursi saat tiba
+						local curHum = GetValidHumanoid()
+						if curHum and curHum.Sit then
+							curHum.Sit = false
+							task.wait(Config.ActionDelay)
+						end
+
+						State.IsBusy = false
+					end
+
+					if not State.AutoDelivering then break end
+
+					-- 2. FASE AMBIL KOPER DARI BAGASI
+					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 55 then
+						State.IsBusy = true
+						Utils.SafeTeleportChar(bagasiPoint.CFrame * CFrame.new(0, 0, 1.8), Config.ActionDelay)
+						task.wait(0.2)
+						Utils.TriggerPrompt(ambilPrompt, bagasiPoint, true)
+
+						local waitCarry = os.clock()
+						while not State.Carrying and State.AutoDelivering and (os.clock() - waitCarry < Config.ActionDelay * 12) do 
+							task.wait(Config.LoopWait / 2) 
+						end
+						State.IsBusy = false
+						task.wait(Config.ActionDelay)
+					end
+
+					if not State.AutoDelivering then break end
+
+					-- 3. FASE ISI KOPER KE ATM
+					if State.Carrying and State.TargetPos then
+						State.IsBusy = true
+						Utils.SafeTeleportChar(CFrame.new(State.TargetPos + Vector3.new(0, 0, 1.5)), Config.ActionDelay)
+						task.wait(Config.ActionDelay)
+
+						local curHum, curHrp = GetValidHumanoid()
+						if curHrp then curHrp.Anchored = true end
+
+						if Network then Network:FireServer("BankCourier", "FillStart") end
+
+						local waitFill = os.clock()
+						while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 25) do 
+							task.wait(Config.LoopWait / 2) 
+						end
+
+						if curHrp then curHrp.Anchored = false end
+						State.IsBusy = false
+						task.wait(Config.ActionDelay)
+					end
+				end
+				task.wait(Config.LoopWait)
+			end
+			State.DeliveryActive = false
+		end)
+	end
+
+	local function Action_ResetAll()
+		State.AutoFarmActive = false
+		State.AutoLoading = false
+		State.AutoDelivering = false
+		State.LoadingActive = false
+		State.DeliveryActive = false
+		State.IsBusy = false
+		State.Phase = "Unemployee"
+		State.Loaded = 0
+		State.Total = 0
+		State.TripStartTime = 0
+		State.CurrentTripElapsed = 0
+
+		ResetPlayerCamera()
+		if autoFarmToggle then pcall(function() autoFarmToggle:Set(false) end) end
+		if statusParagraph then pcall(function() statusParagraph:SetDesc("Phase: Unemployee | Koper: 0/0") end) end
+		if timerParagraph then pcall(function() timerParagraph:SetDesc("Trip Aktif: 00:00 | Terakhir: 00:00") end) end
+
+		pcall(function()
+			local hum, hrp = GetValidHumanoid()
+			if hum and hum.Sit then hum.Sit = false end
+			if hrp then hrp.Anchored = false end
+			local car = GetPlayerCar()
+			if car and car.PrimaryPart then car.PrimaryPart.Anchored = false end
+		end)
+	end
+
+	-- ==============================================================================
+	-- UI WINDUI TAB SETUP
+	-- ==============================================================================
+	local BCATab = Window:Tab({
+		Title = "BCA Courier",
+		Icon = "solar:box-minimalistic-bold"
+	})
+
+	local ControlsSection = BCATab:Section({ Title = "Auto Farm Controls" })
+	local DashboardSection = BCATab:Section({ Title = "Floating Mini Dashboard" })
+	local SettingsSection = BCATab:Section({ Title = "Konfigurasi Drive Engine" })
+	local ShortcutsSection = BCATab:Section({ Title = "Pintasan Teleport" })
+
+	DashboardSection:Button({
+		Title = "Toggle Floating Dashboard (BCA Pocket)",
+		Desc = "Buka/Tutup overlay monitor Saldo Awal, Current, Earned & Gaji Terakhir.",
+		Callback = function()
+			if not FloatingDash then
+				FloatingDash = UICreate.CreateFloatingDashboard("BCA Courier Live Monitor")
+				FloatingDash.UpdateSaldoAwal(State.StartSaldoText)
+				FloatingDash.UpdateCurrentSaldo(State.CurrentSaldoText)
+				FloatingDash.UpdateEarned(State.EarnedText)
+				FloatingDash.UpdateGajiTerakhir(State.LastGajiText)
+				FloatingDash.UpdateStatus(string.format("%s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total)))
+				FloatingDash.UpdateTrips(State.TotalTrips)
+				FetchPocketSaldo()
+			else
+				FloatingDash.Destroy()
+				FloatingDash = nil
+			end
+		end
+	})
+
+	ShortcutsSection:Button({
+		Title = "Teleport ke NPC Start (Lobby)",
+		Callback = function()
+			local Mf = GetBcaFolder()
+			local StartNpc = Mf and Mf:FindFirstChild("NPC_START_JOB")
+			if StartNpc then Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay) end
+		end
+	})
+
+	ShortcutsSection:Button({
+		Title = "Teleport ke Spawner Mobil",
+		Callback = function()
+			local Mf = GetBcaFolder()
+			local CarSpawner = Mf and Mf:FindFirstChild("CAR_SPAWNER_NPC")
+			if CarSpawner then Utils.SafeTeleportChar(CarSpawner:GetPivot(), Config.ActionDelay) end
+		end
+	})
+
+	ShortcutsSection:Button({
+		Title = "Teleport ke Rak Koper",
+		Callback = function()
+			local Mf = GetBcaFolder()
+			local jobFolder = Mf and Mf:FindFirstChild("Job")
+			local bankCourier = jobFolder and jobFolder:FindFirstChild("BankCourier")
+			local KoperSpawn = bankCourier and bankCourier:FindFirstChild("KoperSpawn")
+			if KoperSpawn then Utils.SafeTeleportChar(KoperSpawn:GetPivot(), Config.ActionDelay) end
+		end
+	})
+
+	autoFarmToggle = ControlsSection:Toggle({
+		Title = "Endless Auto Farm",
+		Desc = "Mulai/Hentikan siklus kurir otomatis.",
+		Value = false,
+		Callback = function(active)
+			if State.AutoFarmActive == active then return end
+
+			local bcaFolder = GetBcaFolder()
+			if active and not bcaFolder then
+				warn("⚠️ [BCA Courier] Kamu belum berada di area BCA / Map Gameplay!")
+				task.spawn(function()
+					task.wait(0.1)
+					if autoFarmToggle then pcall(function() autoFarmToggle:Set(false) end) end
+				end)
+				return
+			end
+
+			State.AutoFarmActive = active
+			if active then
+				print("🚀 [AutoFarm] Memulai Safe Platform & Membersihkan Map...")
+				if Utils.DestroyHeavyMaps then
+					Utils.DestroyHeavyMaps()
+				elseif Utils.StartGiantPlatform then
+					Utils.StartGiantPlatform()
+				end
+
+				task.spawn(function()
+					print("▶️ [AutoFarm] Siklus Loop BCA Courier Dimulai...")
+					while State.AutoFarmActive do
+						if _G.MainCoreSession ~= Context.Session then break end
+
+						-- MULAI PENGHITUNGAN STOPWATCH TRIP
+						State.TripStartTime = os.clock()
+
+						Action_StartJob()
+						local startWait = os.clock()
+						while State.Phase == "Unemployee" and (os.clock() - startWait < 8) do
+							if _G.MainCoreSession ~= Context.Session or not State.AutoFarmActive then return end
+							task.wait(Config.LoopWait / 2)
+						end
+						if not State.AutoFarmActive or State.Phase == "Unemployee" then task.wait(Config.RestartDelay) continue end
+
+						Action_SpawnVehicle()
+						local carWait = os.clock()
+						local car = nil
+						while os.clock() - carWait < 10 do
+							if _G.MainCoreSession ~= Context.Session or not State.AutoFarmActive then return end
+							car = GetPlayerCar()
+							if car then break end
+							task.wait(Config.LoopWait / 2)
+						end
+						if not car or not State.AutoFarmActive then task.wait(Config.RestartDelay) continue end
+
+						State.AutoLoading = true
+						RunLoadingLoop()
+						local loadTimeout = os.clock()
+						while State.AutoLoading and State.AutoFarmActive and (os.clock() - loadTimeout < 60) do
+							if _G.MainCoreSession ~= Context.Session then return end
+							task.wait(Config.LoopWait)
+						end
+						if not State.AutoFarmActive then break end
+
+						State.AutoDelivering = true
+						RunDeliveryLoop()
+						local deliverTimeout = os.clock()
+						while State.AutoDelivering and State.AutoFarmActive and (os.clock() - deliverTimeout < 300) do
+							if _G.MainCoreSession ~= Context.Session then return end
+							task.wait(Config.LoopWait)
+						end
+						if not State.AutoFarmActive then break end
+
+						-- Return car kembali ke spawner
+						local returnCar = GetPlayerCar()
+						local Mf = GetBcaFolder()
+						local CarSpawner = Mf and Mf:FindFirstChild("CAR_SPAWNER_NPC")
+						if returnCar and CarSpawner and DriveEngine then
+							DriveEngine.DriveTo(CarSpawner:GetPivot().Position, {
+								Speed = Config.DriveSpeed,
+								MinDuration = 10,
+								FreezeCam = Config.FreezeCamera,
+								StopCondition = function()
+									return not State.AutoFarmActive or (_G.MainCoreSession ~= Context.Session)
+								end
+							})
+							local curHum = GetValidHumanoid()
+							if curHum and curHum.Sit then curHum.Sit = false end
+						end
+						if not State.AutoFarmActive then break end
+
+						local StartNpc = Mf and Mf:FindFirstChild("NPC_START_JOB")
+						if StartNpc then
+							Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
+							task.wait(0.5)
+
+							local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
+							if prompt then prompt.Enabled = true end
+							Utils.TriggerPrompt(prompt, StartNpc.PrimaryPart or StartNpc:FindFirstChildWhichIsA("BasePart"))
+						end
+
+						local endWait = os.clock()
+						while State.Phase ~= "Unemployee" and (os.clock() - endWait < 10) do
+							if _G.MainCoreSession ~= Context.Session or not State.AutoFarmActive then return end
+							task.wait(Config.LoopWait / 2)
+						end
+
+						if State.TripStartTime > 0 then
+							State.LastTripDuration = os.clock() - State.TripStartTime
+							State.TripStartTime = 0
+						end
+
+						FetchPocketSaldo()
+						task.wait(Config.RestartDelay)
+					end
+
+					Action_ResetAll()
+				end)
+			else
+				print("🛑 [AutoFarm] Menghentikan botting & platform.")
+				Action_ResetAll()
+				if Utils.StopGiantPlatform then
+					Utils.StopGiantPlatform()
+				end
+			end
+		end
+	})
+
+	statusParagraph = ControlsSection:Paragraph({
+		Title = "Status Pekerjaan",
+		Desc = "Phase: Unemployee | Koper: 0/0",
+		Image = "info"
+	})
+
+	timerParagraph = ControlsSection:Paragraph({
+		Title = "Stopwatch Trip (Debug Timer)",
+		Desc = "Trip Aktif: 00:00 | Terakhir: 00:00",
+		Image = "clock"
+	})
+
+	-- REALTIME MONITOR & STOPWATCH LOOP
+	task.spawn(function()
+		while task.wait(0.5) do
+			if _G.MainCoreSession ~= Context.Session then break end
+
+			if State.TripStartTime > 0 then
+				State.CurrentTripElapsed = os.clock() - State.TripStartTime
+			else
+				State.CurrentTripElapsed = 0
+			end
+
+			local statusText = string.format("Phase: %s | Koper: %s/%s", tostring(State.Phase), tostring(State.Loaded), tostring(State.Total))
+			local timerText = string.format("Trip Aktif: %s | Terakhir: %s", FormatTime(State.CurrentTripElapsed), FormatTime(State.LastTripDuration))
+
+			pcall(function()
+				if statusParagraph then statusParagraph:SetDesc(statusText) end
+				if timerParagraph then timerParagraph:SetDesc(timerText) end
+				if FloatingDash then
+					FloatingDash.UpdateStatus(string.format("%s (%s)", statusText, FormatTime(State.CurrentTripElapsed)))
+				end
+			end)
+		end
+	end)
+
+	SettingsSection:Toggle({
+		Title = "Freeze Camera Saat Melaju (FPS Boost)",
+		Desc = "Mengunci kamera saat mobil bergerak untuk menurunkan beban render GPU.",
+		Value = Config.FreezeCamera,
+		Callback = function(val)
+			Config.FreezeCamera = val
+		end
+	})
+
+	SettingsSection:Input({
+		Title = "Kecepatan Mengemudi (Speed)",
+		Value = tostring(Config.DriveSpeed),
+		Callback = function(val)
+			local num = tonumber(val)
+			if num then Config.DriveSpeed = num end
+		end
+	})
+
+	SettingsSection:Slider({
+		Title = "Durasi Minimum Perjalanan",
+		Value = { Min = 10, Max = 45, Default = 20 },
+		Callback = function(val) Config.MinTravelDuration = val end
+	})
+
+	SettingsSection:Slider({
+		Title = "Jeda Aksi (Action Delay)",
+		Value = { Min = 2, Max = 20, Default = 3 },
+		Callback = function(val) Config.ActionDelay = val / 10 end
+	})
+
+	SettingsSection:Input({
+		Title = "Jeda Mengulang (Restart Delay)",
+		Value = tostring(Config.RestartDelay),
+		Callback = function(val)
+			local num = tonumber(val)
+			if num then Config.RestartDelay = num end
+		end
+	})
+
+	SettingsSection:Button({
+		Title = "Paksa Reset Bot (Emergency Reset)",
+		Callback = function() Action_ResetAll() end
+	})
+end
+
+return BCA
