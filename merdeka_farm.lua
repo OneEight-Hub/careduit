@@ -1,24 +1,21 @@
 -- ==============================================================================
--- CDID HUB - AUTO FARM MERDEKA RACE EVENT (AUTO 3X SPEED ON RETURN)
+-- CDID HUB - AUTO FARM MERDEKA RACE EVENT (POWERED BY DRIVE ENGINE)
 -- ==============================================================================
 local MerdekaFarm = {}
 
-function MerdekaFarm.Init(Window, Utils, Context, UICreate)
+function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 	local Players = game:GetService("Players")
 	local ReplicatedStorage = game:GetService("ReplicatedStorage")
-	local Workspace = game:GetService("Workspace")
-	local RunService = game:GetService("RunService")
 	local LocalPlayer = Players.LocalPlayer
 
 	-- CONFIGURABLE VALUES
 	local Config = {
 		DriveSpeed = 190,
-		ReturnSpeedMultiplier = 3, -- Pengali kecepatan 3x saat membawa bendera
+		ReturnSpeedMultiplier = 3, -- Pengali 3x saat membawa bendera
 		MinTravelDuration = 8,
-		MinReturnDuration = 3,     -- Batas minimum waktu tempuh saat return
-		ActionDelay = 0.3,
+		MinReturnDuration = 3,
+		FreezeCamera = true,
 		LoopWait = 0.5,
-		RestartDelay = 3.0,
 		DefaultLobbyName = "CDID_AutoMerdeka"
 	}
 
@@ -34,7 +31,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 		SelectedCar = "None",
 		AvailableCars = {},
 
-		-- Target Waypoints dari Server
+		-- Target Waypoints
 		CurrentTargetPos = nil,
 		FlagPos = nil,
 		BasePos = nil,
@@ -48,7 +45,6 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 		LastReward = 0
 	}
 
-	local isDrivingActive = false
 	local autoFarmToggle
 	local statusParagraph
 	local FloatingDash = nil
@@ -60,153 +56,6 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 		if type(val) ~= "number" then return tostring(val or 0) end
 		local r = string.format("%d", math.floor(val)):reverse():gsub("%d%d%d", "%1."):reverse():gsub("^%.", "")
 		return r
-	end
-
-	local function GetValidHumanoid()
-		local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-		local hum = char:FindFirstChildOfClass("Humanoid")
-		if hum and hum.Health > 0 then
-			return hum, char:FindFirstChild("HumanoidRootPart")
-		end
-		return nil, nil
-	end
-
-	local function GetPlayerCar()
-		local vehicles = Workspace:FindFirstChild("Vehicles")
-		if not vehicles then return nil end
-		for _, v in ipairs(vehicles:GetChildren()) do
-			if v.Name:find(LocalPlayer.Name, 1, true) then
-				return v
-			end
-		end
-		return nil
-	end
-
-	local function EnsurePlayerSeated(car)
-		local hum, hrp = GetValidHumanoid()
-		if not hum or not hrp or not car then return false end
-
-		local seat = car:FindFirstChildWhichIsA("VehicleSeat", true) 
-			or car:FindFirstChild("DriveSeat", true) 
-			or car:FindFirstChild("DriverSeat", true)
-
-		if not seat then return false end
-		if hum.SeatPart == seat or hum.Sit then return true end
-
-		local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
-		if primary then primary.Anchored = false end
-
-		hrp.CFrame = seat.CFrame * CFrame.new(0, 1.2, 1.2)
-		task.wait(Config.ActionDelay)
-
-		local drivePrompt = seat:FindFirstChild("PromptDriveSeat", true)
-			or seat:FindFirstChildWhichIsA("ProximityPrompt", true)
-			or car:FindFirstChild("PromptDriveSeat", true)
-
-		if drivePrompt and drivePrompt.Enabled then
-			drivePrompt.RequiresLineOfSight = false
-			drivePrompt.MaxActivationDistance = 25
-			if fireproximityprompt then 
-				fireproximityprompt(drivePrompt) 
-			else
-				pcall(function() seat:Sit(hum) end)
-			end
-			drivePrompt:InputHoldBegin()
-			task.wait(drivePrompt.HoldDuration + 0.1)
-			drivePrompt:InputHoldEnd()
-		else
-			pcall(function() seat:Sit(hum) end)
-		end
-
-		local timeout = os.clock()
-		while not hum.Sit and (os.clock() - timeout < 2.5) do task.wait(0.1) end
-		return hum.Sit
-	end
-
-	-- ==============================================================================
-	-- SAFE DRIVE (SMOOTHSTEP PATHING ANTI-RUBBERBAND DENGAN DYNAMIC DURATION)
-	-- ==============================================================================
-	local function DriveCarNaturallyTo(targetPos, speed, minDuration)
-		if isDrivingActive or not targetPos then return end
-		isDrivingActive = true
-
-		local car = GetPlayerCar()
-		if not car then
-			isDrivingActive = false
-			return
-		end
-
-		speed = speed or Config.DriveSpeed
-		minDuration = minDuration or Config.MinTravelDuration
-
-		local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
-		local seat = car:FindFirstChildWhichIsA("VehicleSeat", true)
-		if not primary then
-			isDrivingActive = false
-			return
-		end
-
-		EnsurePlayerSeated(car)
-
-		local startCF = car:GetPivot()
-		local dirToTarget = (targetPos - startCF.Position).Unit
-		local flatDir = Vector3.new(dirToTarget.X, 0, dirToTarget.Z).Unit
-		local stopPos = targetPos + Vector3.new(0, 1.5, 0)
-		local targetCF = CFrame.new(stopPos, stopPos + flatDir)
-
-		local dist = (startCF.Position - stopPos).Magnitude
-		local duration = math.max(minDuration, dist / speed)
-
-		primary.Anchored = false
-
-		-- Nonaktifkan tabrakan body mobil agar tidak nyangkut
-		for _, p in ipairs(car:GetDescendants()) do
-			if p:IsA("BasePart") and p.Name ~= "VehicleSeat" and p ~= primary then
-				p.CanCollide = false
-			end
-		end
-
-		local statusLabel = State.IsCarryingFlag and "⚡ [Boost 3X Return Base]" or "🏎️ [Drive to Flag]"
-		print(string.format("%s (Speed: %.0f | Jarak: %.0f studs | Durasi: %.1f dtk)...", statusLabel, speed, dist, duration))
-
-		local startTime = os.clock()
-
-		while State.AutoFarmActive and State.IsRacing do
-			if _G.MainCoreSession ~= Context.Session then break end
-
-			local elapsed = os.clock() - startTime
-			local alpha = math.clamp(elapsed / duration, 0, 1)
-
-			-- Smoothstep interpolation
-			local smoothAlpha = alpha * alpha * (3 - 2 * alpha)
-			local currentCF = startCF:Lerp(targetCF, smoothAlpha)
-
-			local hum = GetValidHumanoid()
-			if hum and not hum.Sit and seat then
-				pcall(function() seat:Sit(hum) end)
-			end
-
-			car:PivotTo(currentCF)
-			primary.AssemblyLinearVelocity = Vector3.zero
-			primary.AssemblyAngularVelocity = Vector3.zero
-
-			if alpha >= 1 then break end
-			RunService.Heartbeat:Wait()
-		end
-
-		car:PivotTo(targetCF)
-		for _, p in ipairs(car:GetDescendants()) do
-			if p:IsA("BasePart") then
-				p.AssemblyLinearVelocity = Vector3.zero
-				p.AssemblyAngularVelocity = Vector3.zero
-			end
-		end
-
-		task.wait(0.2)
-		primary.Anchored = true
-		task.wait(Config.ActionDelay)
-
-		isDrivingActive = false
 	end
 
 	-- ==============================================================================
@@ -346,7 +195,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 					State.IsCarryingFlag = true
 					State.BasePos = payload.BasePos
 					State.CurrentTargetPos = payload.BasePos
-					print("📦 [MerdekaHUD] Bendera diambil! Siap Boost 3x Speed menuju Base...")
+					print("📦 [MerdekaHUD] Bendera diambil! Boost 3X Speed menuju Base...")
 
 				elseif action == "Planted" then
 					State.IsCarryingFlag = false
@@ -361,7 +210,6 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 					State.IsRacing = false
 					State.InLobby = false
 					State.IsCarryingFlag = false
-					isDrivingActive = false
 					State.RacesCompleted = State.RacesCompleted + 1
 					State.LastReward = payload.Reward or 0
 
@@ -381,7 +229,6 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 					State.IsRacing = false
 					State.InLobby = false
 					State.IsCarryingFlag = false
-					isDrivingActive = false
 				end
 			end)
 			table.insert(Context.Hooks, hudHook)
@@ -389,7 +236,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 	end
 
 	-- ==============================================================================
-	-- CORE AUTOFARM LOOP (DENGAN DYNAMIC 3X RETURN BOOST)
+	-- CORE AUTOFARM LOOP (MENGGUNAKAN UNIVERSAL DRIVE ENGINE)
 	-- ==============================================================================
 	local function StartAutoFarmLoop()
 		task.spawn(function()
@@ -399,20 +246,26 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 			while State.AutoFarmActive do
 				if _G.MainCoreSession ~= Context.Session then break end
 
-				-- A. JIKA SEDANG BALAPAN: GERAKKAN MOBIL KE TARGET WAYPOINT
+				-- A. JIKA SEDANG BALAPAN: GERAKKAN MOBIL VIA DRIVE ENGINE
 				if State.IsRacing then
-					local car = GetPlayerCar()
-					if car and State.CurrentTargetPos and not isDrivingActive then
-						-- Hitung kecepatan & durasi dinamis berdasarkan status bawa bendera
+					if State.CurrentTargetPos and DriveEngine and not DriveEngine.IsDriving() then
 						local targetSpeed = Config.DriveSpeed
 						local minDur = Config.MinTravelDuration
 
+						-- Boost 3X Speed jika sedang membawa bendera kembali ke base
 						if State.IsCarryingFlag then
 							targetSpeed = Config.DriveSpeed * Config.ReturnSpeedMultiplier
 							minDur = Config.MinReturnDuration
 						end
 
-						DriveCarNaturallyTo(State.CurrentTargetPos, targetSpeed, minDur)
+						DriveEngine.DriveTo(State.CurrentTargetPos, {
+							Speed = targetSpeed,
+							MinDuration = minDur,
+							FreezeCam = Config.FreezeCamera,
+							StopCondition = function()
+								return not State.AutoFarmActive or not State.IsRacing or (_G.MainCoreSession ~= Context.Session)
+							end
+						})
 					end
 					task.wait(Config.LoopWait)
 					continue
@@ -467,7 +320,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 			end
 			State.InLobby = false
 			State.IsRacing = false
-			isDrivingActive = false
+			if DriveEngine then DriveEngine.FreezeCamera(false) end
 		end)
 	end
 
@@ -481,7 +334,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 
 	local ControlsSection = MerdekaTab:Section({ Title = "Kontrol Auto Farm Merdeka" })
 	local CarSection      = MerdekaTab:Section({ Title = "Pilihan Mobil Balap" })
-	local SettingsSection = MerdekaTab:Section({ Title = "Konfigurasi Kecepatan Safe Drive" })
+	local SettingsSection = MerdekaTab:Section({ Title = "Konfigurasi Drive Engine" })
 	local StatusSection   = MerdekaTab:Section({ Title = "Live Monitor & Shop Points" })
 
 	StatusSection:Button({
@@ -583,6 +436,15 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 			end)
 		end
 	end)
+
+	SettingsSection:Toggle({
+		Title = "Freeze Camera Saat Melaju (FPS Boost)",
+		Desc = "Mengunci kamera saat mobil bergerak untuk menurunkan beban render GPU.",
+		Value = Config.FreezeCamera,
+		Callback = function(val)
+			Config.FreezeCamera = val
+		end
+	})
 
 	SettingsSection:Input({
 		Title = "Kecepatan Base (Ambil Bendera)",
