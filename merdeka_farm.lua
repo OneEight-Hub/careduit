@@ -95,19 +95,53 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 			local ok, Net = pcall(require, netModule)
 			if not ok or not Net then return end
 
-			local data = nil
-			pcall(function()
-				data = Net:InvokeServer("MerdekaShopData")
-			end)
-
+			local data = Net:InvokeServer("MerdekaShopData")
 			if type(data) == "table" then
-				-- CDID Server mengembalikan field 'Points' atau 'Point'
-				local pts = data.Points or data.Point or 0
-				State.MerdekaPoints = tonumber(pts) or 0
-
+				State.MerdekaPoints = data.Points or data.Point or 0
 				if FloatingDash then
-					FloatingDash.UpdateSaldo(string.format("%s Pts", FormatNumber(State.MerdekaPoints)))
+					FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
 				end
+			end
+		end)
+	end
+
+	-- Buka GUI Shop CDID dari mana saja
+	local function OpenMerdekaShopDirect()
+		task.spawn(function()
+			local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+			local eventGui = pGui and pGui:FindFirstChild("MerdekaEvent")
+			local modules = eventGui and eventGui:FindFirstChild("Modules")
+			local shopModObj = modules and modules:FindFirstChild("MerdekaShopModule")
+			local netModule = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Network")
+
+			if shopModObj and netModule then
+				local okShop, ShopModule = pcall(require, shopModObj)
+				local okNet, Net = pcall(require, netModule)
+
+				if okShop and ShopModule and okNet and Net then
+					local shopData = Net:InvokeServer("MerdekaShopData")
+					if type(shopData) == "table" and shopData.Rewards then
+						local owned = shopData.Owned or {}
+						local formattedData = {
+							["Point"] = shopData.Points or 0
+						}
+						for _, reward in ipairs(shopData.Rewards) do
+							formattedData[reward.dataKey] = owned[reward.dataKey] and 1 or 0
+						end
+
+						ShopModule.SetCatalog(shopData.Rewards)
+						ShopModule.UpdateData(formattedData)
+						ShopModule.Open()
+
+						State.MerdekaPoints = shopData.Points or 0
+						if FloatingDash then
+							FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
+						end
+						print("🛒 [Merdeka Shop] Shop dibuka! Poin:", State.MerdekaPoints)
+					end
+				end
+			else
+				warn("⚠️ [Merdeka Shop] MerdekaShopModule belum siap di PlayerGui!")
 			end
 		end)
 	end
@@ -231,10 +265,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 						if resFrame then resFrame.Visible = false end
 					end
 
-					-- Tunggu 1 detik agar server selesai mencatat reward baru sebelum fetch saldo
-					task.delay(1.0, function()
-						FetchMerdekaShopData()
-					end)
+					FetchMerdekaShopData()
 
 				elseif action == "Left" or action == "Reset" then
 					State.IsRacing = false
@@ -354,7 +385,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 		Callback = function()
 			if not FloatingDash then
 				FloatingDash = UICreate.CreateFloatingDashboard("Merdeka Race Monitor")
-				FloatingDash.UpdateSaldo(string.format("%s Pts", FormatNumber(State.MerdekaPoints)))
+				FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
 				FloatingDash.UpdateStatus("Status: Standby")
 				FloatingDash.UpdateTrips(State.RacesCompleted)
 				FetchMerdekaShopData()
@@ -362,6 +393,14 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 				FloatingDash.Destroy()
 				FloatingDash = nil
 			end
+		end
+	})
+
+	StatusSection:Button({
+		Title = "Buka Merdeka Shop UI",
+		Desc = "Buka katalog Merdeka Event Shop langsung tanpa ke NPC.",
+		Callback = function()
+			OpenMerdekaShopDirect()
 		end
 	})
 
@@ -423,37 +462,37 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 		Image = "flag"
 	})
 
-	-- Live status updater & periodic points poller
+	-- Live status, Stopwatch & Points Polling Loop
 	task.spawn(function()
 		local pollCounter = 0
 		while task.wait(0.5) do
 			if _G.MainCoreSession ~= Context.Session then break end
 
-			-- Polling poin ke server tiap 10 detik (20 ticks x 0.5s)
+			-- Polling poin ke server setiap ~10 detik
 			pollCounter = pollCounter + 1
 			if pollCounter >= 20 then
-				FetchMerdekaShopData()
 				pollCounter = 0
+				FetchMerdekaShopData()
 			end
 
 			local stateText = "Idle"
 			if State.IsRacing then
 				if State.IsCarryingFlag then
-					stateText = "⚡ Mengantar Bendera (3X Speed)"
+					stateText = "⚡ Mengantar Bendera ke Base (3X Speed)"
 				else
-					stateText = "Meluncur ke Bendera 🚩"
+					stateText = "Meluncur ke Titik Bendera 🚩"
 				end
 			elseif State.InLobby then
-				stateText = "Di Lobi (Menunggu Start) ⏳"
+				stateText = "Di Lobi (Menunggu Ready/Start) ⏳"
 			end
 
-			local fullDesc = string.format("Status: %s | Bendera: %d/%d | Selesai: %d | PTS: %s", stateText, State.PlantedCount, State.TotalFlags, State.RacesCompleted, FormatNumber(State.MerdekaPoints))
+			local fullDesc = string.format("Status: %s | Bendera: %d/%d | Selesai: %d | Poin: %s PTS", stateText, State.PlantedCount, State.TotalFlags, State.RacesCompleted, FormatNumber(State.MerdekaPoints))
 			pcall(function()
 				if statusParagraph then statusParagraph:SetDesc(fullDesc) end
 				if FloatingDash then
 					FloatingDash.UpdateStatus(stateText)
 					FloatingDash.UpdateTrips(State.RacesCompleted)
-					FloatingDash.UpdateSaldo(string.format("%s Pts", FormatNumber(State.MerdekaPoints)))
+					FloatingDash.UpdateSaldo(string.format("%s PTS", FormatNumber(State.MerdekaPoints)))
 				end
 			end)
 		end
