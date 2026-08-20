@@ -374,45 +374,61 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	end)
 
 	-- ==============================================================================
-	-- AUTOFARM SEQUENCES (REMOTE-FIRST / ZERO NPC TELEPORT)
+	-- AUTOFARM SEQUENCES (DENGAN PENDEKATAN JARAK AMAN < 10 STUDS)
 	-- ==============================================================================
 	local function Action_StartJob()
 		local Mf = GetBcaFolder()
 		if not Mf or State.Phase == "Loading" or State.Phase == "Delivering" then return end
 		local StartNpc = Mf:FindFirstChild("NPC_START_JOB")
 		if not StartNpc then return end
-
-		print("⚡ [Step 1] Triggering Start Job NPC via Remote...")
+	
+		print("📍 [Step 1] Mendekat ke NPC Start Job (Radius 6 studs)...")
 		State.TripStartTime = os.clock()
-
+	
+		-- 1. Posisikan karakter 6 studs tepat di depan NPC
+		local targetCF = StartNpc:GetPivot()
+		SafeTeleportInFront(targetCF, 6.0)
+		task.wait(0.3)
+	
+		-- 2. Trigger Proximity Prompt & Dialog Server
 		local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
 		if prompt then
-			RemoteTriggerPrompt(prompt)
+			TriggerPromptDirect(prompt)
 		end
-
+	
+		task.wait(0.2)
 		if NpcDialogEvent then
 			NpcDialogEvent:FireServer("Finish", nil)
 		end
-
+	
+		-- 3. Tunggu respon server mengubah State.Phase
 		local dialogWait = os.clock()
-		while State.Phase == "Unemployee" and (os.clock() - dialogWait < 4) do task.wait(0.1) end
+		while State.Phase == "Unemployee" and (os.clock() - dialogWait < 5) do 
+			task.wait(0.1) 
+		end
 		task.wait(Config.ActionDelay)
 	end
-
+	
 	local function Action_SpawnVehicle()
 		local Mf = GetBcaFolder()
 		if not Mf then return end
 		local CarSpawner = Mf:FindFirstChild("CAR_SPAWNER_NPC")
 		if not CarSpawner then return end
-
-		print("🚗 [Step 2] Triggering Car Spawner via Remote...")
+	
+		print("🚗 [Step 2] Mendekat ke Spawner Mobil (Radius 6 studs)...")
+		
+		-- 1. Posisikan karakter 6 studs di depan Spawner
+		local targetCF = CarSpawner:GetPivot()
+		SafeTeleportInFront(targetCF, 6.0)
+		task.wait(0.3)
+	
+		-- 2. Trigger Prompt Spawner
 		local spawnPrompt = CarSpawner:FindFirstChildWhichIsA("ProximityPrompt", true)
 		if spawnPrompt then
-			RemoteTriggerPrompt(spawnPrompt)
+			TriggerPromptDirect(spawnPrompt)
 		end
-		task.wait(1.0)
+		task.wait(1.2)
 	end
-
 	local function RunLoadingLoop()
 		if State.LoadingActive then return end
 		State.LoadingActive = true
