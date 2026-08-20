@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - DYNAMIC SERVER & PRIVATE SERVER MANAGER (EXACT COMPONENT MATCH)
+-- CDID HUB - DYNAMIC SERVER & PRIVATE SERVER MANAGER (INSTANT CODE SYNC)
 -- ==============================================================================
 local ServerManager = {}
 
@@ -92,7 +92,7 @@ function ServerManager.Init(Window, Utils, Context)
 	local serverCodeParagraph = nil
 
 	-- ==============================================================================
-	-- 3. DETEKSI KODE LANGSUNG DARI KOMPONEN PRIVATE SERVER
+	-- 3. DETEKSI & SINKRONISASI KODE INSTAN
 	-- ==============================================================================
 	local function ApplyServerCode(code)
 		if not code or type(code) ~= "string" then return end
@@ -100,7 +100,7 @@ function ServerManager.Init(Window, Utils, Context)
 		if clean == "" or clean == "ServerLabel" or clean:find("ms") or clean:find(",") then return end
 
 		activeServerCode = clean
-		print("🔑 [Private Server] Kode aktif terdeteksi:", activeServerCode)
+		print("🔑 [Private Server] Kode aktif terdeteksi & disinkronkan:", activeServerCode)
 
 		if serverCodeParagraph then
 			pcall(function()
@@ -115,24 +115,39 @@ function ServerManager.Init(Window, Utils, Context)
 		end
 	end
 
+	local function HookServerLabelInstance(labelInstance)
+		if not labelInstance or not labelInstance:IsA("TextLabel") then return end
+		
+		-- Baca teks awal
+		if labelInstance.Text ~= "" and labelInstance.Text ~= "ServerLabel" then
+			ApplyServerCode(labelInstance.Text)
+		end
+
+		-- Pasang listener perubahan teks realtime saat di-generate ulang
+		local conn = labelInstance:GetPropertyChangedSignal("Text"):Connect(function()
+			ApplyServerCode(labelInstance.Text)
+		end)
+		table.insert(Context.Hooks, conn)
+	end
+
 	local function ScanExactPrivateServerFrame()
-		-- 1. Cek dari WindowModule UIAnimation game jika ada
+		-- 1. Cek dari WindowModule UIAnimation game
 		if CDID_UIAnimation and CDID_UIAnimation.WindowModule and CDID_UIAnimation.WindowModule.PrivateServer then
 			local psComp = CDID_UIAnimation.WindowModule.PrivateServer
-			if psComp.ServerLabel and psComp.ServerLabel.Text ~= "" and psComp.ServerLabel.Text ~= "ServerLabel" then
-				ApplyServerCode(psComp.ServerLabel.Text)
+			if psComp.ServerLabel then
+				HookServerLabelInstance(psComp.ServerLabel)
 				return true
 			end
 		end
 
-		-- 2. Cek dari Hierarki PlayerGui yang memiliki InsertCode & GenerateButton
+		-- 2. Cek dari Hierarki PlayerGui
 		local pGui = LocalPlayer:FindFirstChild("PlayerGui")
 		if pGui then
 			for _, inst in ipairs(pGui:GetDescendants()) do
 				if inst:FindFirstChild("InsertCode") and inst:FindFirstChild("GenerateButton") then
 					local sLabel = inst:FindFirstChild("ServerLabel")
-					if sLabel and sLabel:IsA("TextLabel") and sLabel.Text ~= "" and sLabel.Text ~= "ServerLabel" then
-						ApplyServerCode(sLabel.Text)
+					if sLabel then
+						HookServerLabelInstance(sLabel)
 						return true
 					end
 				end
@@ -216,15 +231,20 @@ function ServerManager.Init(Window, Utils, Context)
 		Title = "Join Private Server",
 		Desc = "Join menggunakan kode di atas dan map terpilih.",
 		Callback = function()
+			-- Fallback: Scan ulang frame jika variabel masih kosong
 			if activeServerCode == "" then
-				warn("⚠️ [Private Server] Kode server belum terisi!")
+				ScanExactPrivateServerFrame()
+			end
+
+			if activeServerCode == "" then
+				warn("⚠️ [Private Server] Kode server belum terisi! Silakan generate terlebih dahulu.")
 				return
 			end
 
 			local targetInfo = MapDictionary[currentSelectedName]
 			local mapKey = targetInfo and targetInfo.Key or "Jakarta"
 
-			print(string.format("🔑 [Private Server] Join Server Code: %s (Map: %s)...", activeServerCode, mapKey))
+			print(string.format("🔑 [Private Server] Mengirim request Join Server Code: %s (Map: %s)...", activeServerCode, mapKey))
 
 			if CDID_Network then
 				CDID_Network:FireServer("PrivateServer", "Join", tostring(activeServerCode), mapKey)
@@ -236,9 +256,18 @@ function ServerManager.Init(Window, Utils, Context)
 		Title = "Ambil / Generate Kode Server",
 		Desc = "Meminta kode server aktif milik akunmu dari game.",
 		Callback = function()
+			print("🔄 [Private Server] Merequest generate / refresh kode server...")
 			if CDID_Network then
 				CDID_Network:FireServer("PrivateServer", "Create")
 			end
+			-- Trigger scan berkala untuk menangkap balasan server
+			task.spawn(function()
+				for _ = 1, 5 do
+					task.wait(0.5)
+					ScanExactPrivateServerFrame()
+					if activeServerCode ~= "" then break end
+				end
+			end)
 		end
 	})
 
@@ -248,6 +277,8 @@ function ServerManager.Init(Window, Utils, Context)
 			if activeServerCode ~= "" and setclipboard then
 				setclipboard(activeServerCode)
 				print("📋 [Clipboard] Disalin:", activeServerCode)
+			else
+				warn("⚠️ [Clipboard] Belum ada kode yang terdeteksi.")
 			end
 		end
 	})
@@ -286,7 +317,7 @@ function ServerManager.Init(Window, Utils, Context)
 		end
 	})
 
-	-- Auto Scan saat modul dibuka
+	-- Scan otomatis saat startup
 	task.spawn(function()
 		task.wait(1.5)
 		ScanExactPrivateServerFrame()
