@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (ANTI-RACE CONDITION & SINGLE-ROUND LOCK)
+-- CDID HUB - BCA COURIER (FRAME-ACCURATE & ZERO MEMORY LEAK)
 -- ==============================================================================
 local BCA = {}
 
@@ -7,6 +7,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	local Players = game:GetService("Players")
 	local ReplicatedStorage = game:GetService("ReplicatedStorage")
 	local Workspace = game:GetService("Workspace")
+	local RunService = game:GetService("RunService")
 	local LocalPlayer = Players.LocalPlayer
 
 	-- CONFIGURABLE VALUES
@@ -62,9 +63,18 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	local JobRemote = nil
 	local FloatingDash = nil
 
-	-- ANTI-RACE CONDITION TOKENS
+	-- SINKRONISASI MINIGAME & TRACKER TOKEN
 	local CurrentLoadToken = 0
 	local IsMinigameActive = false
+	local ActiveLoadConnection = nil
+
+	local function CleanupLoadConnection()
+		if ActiveLoadConnection then
+			ActiveLoadConnection:Disconnect()
+			ActiveLoadConnection = nil
+		end
+		IsMinigameActive = false
+	end
 
 	-- ==============================================================================
 	-- HELPER FUNCTIONS
@@ -351,33 +361,44 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				State.Loaded = arg1
 				State.Carrying = (arg4 == true)
 				if not State.Carrying then
-					IsMinigameActive = false
+					CleanupLoadConnection()
 				end
 
 			-- ======================================================================
-			-- SINKRONISASI LOAD KOPER DENGAN SINGLE ROUND TOKEN LOCK
+			-- SINKRONISASI LOAD KOPER (FRAME-ACCURATE REALTIME FORMULA)
 			-- ======================================================================
 			elseif action == "LoadRound" and typeof(arg1) == "table" then
 				CurrentLoadToken = CurrentLoadToken + 1
 				local thisToken = CurrentLoadToken
 				IsMinigameActive = true
 
-				local greenStart = arg1.greenStart or 0.4
-				local greenSize = arg1.greenSize or 0.2
-				local period = math.max(arg1.period or 1.0, 0.1)
-
-				-- Target di 55% lebar zona hijau
-				local targetProgress = greenStart + (greenSize * 0.55)
-				local delayTime = targetProgress * period
-
-				if delayTime < 0.25 then
-					delayTime = (2 - targetProgress) * period
+				-- Bersihkan connection loop ronde sebelumnya
+				if ActiveLoadConnection then
+					ActiveLoadConnection:Disconnect()
+					ActiveLoadConnection = nil
 				end
 
-				local curSession = Context.Session
-				task.delay(delayTime, function()
-					-- Hanya jalankan jika sesi dan token ronde masih cocok (Anti Double Input)
-					if _G.MainCoreSession == curSession and CurrentLoadToken == thisToken and IsMinigameActive then
+				local t0 = os.clock()
+				local period = math.max(arg1.period or 1.0, 0.1)
+				local greenStart = arg1.greenStart or 0.4
+				local greenSize = arg1.greenSize or 0.2
+
+				-- Rentang target ideal (45% - 75% kotak hijau)
+				local minTarget = greenStart + (greenSize * 0.45)
+				local maxTarget = greenStart + (greenSize * 0.75)
+
+				ActiveLoadConnection = RunService.Heartbeat:Connect(function()
+					if _G.MainCoreSession ~= Context.Session or CurrentLoadToken ~= thisToken or not IsMinigameActive then
+						CleanupLoadConnection()
+						return
+					end
+
+					-- Rumus asli pembacaan posisi bar CDID
+					local progress = (os.clock() - t0) / period % 2
+					local currentPos = progress <= 1 and progress or (2 - progress)
+
+					if currentPos >= minTarget and currentPos <= maxTarget then
+						CleanupLoadConnection()
 						if Network then
 							Network:FireServer("BankCourier", "LoadPress")
 						end
@@ -385,10 +406,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				end)
 
 			elseif action == "LoadResult" then
-				-- Jika sukses atau ronde selesai, reset status minigame
-				if arg1 == true or State.Loaded >= State.Total then
-					IsMinigameActive = false
-				end
+				CleanupLoadConnection()
 
 			-- ======================================================================
 			-- SINKRONISASI MINIGAME ATM (SKILLCHECK)
@@ -422,14 +440,14 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 			elseif action == "Complete" or action == "Returning" then
 				State.Phase = "Returning"
-				IsMinigameActive = false
+				CleanupLoadConnection()
 
 			elseif action == "Stop" then
 				State.Phase = "Unemployee"
 				State.Loaded = 0
 				State.Total = 0
 				State.TotalTrips = State.TotalTrips + 1
-				IsMinigameActive = false
+				CleanupLoadConnection()
 
 				if State.TripStartTime then
 					State.LastTripDuration = os.clock() - State.TripStartTime
@@ -531,7 +549,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 					end
 					State.IsBusy = false
 
-				-- 2. Muat koper ke bagasi (Sekali Trigger, Jangan Spam!)
+				-- 2. Muat koper ke bagasi (Sekali Trigger, Tunggu Minigame)
 				elseif State.Carrying and not State.IsBusy then
 					if bagasiPoint then
 						State.IsBusy = true
@@ -544,10 +562,9 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 						local muatPrompt = GetMuatPrompt(bagasiPoint)
 						if muatPrompt then
-							TriggerPrompt(muatPrompt) -- Dipanggil sekali saja
+							TriggerPrompt(muatPrompt)
 						end
 
-						-- Tunggu sampai minigame selesai dan koper lepas dari tangan
 						local timeout = os.clock()
 						while State.Carrying and State.AutoLoading and (os.clock() - timeout < 4.0) do 
 							task.wait(0.2) 
@@ -681,7 +698,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		State.Total = 0
 		State.TripStartTime = nil
 		CurrentLoadToken = 0
-		IsMinigameActive = false
+		CleanupLoadConnection()
 
 		ResetPlayerCamera()
 		RestoreCharacterPhysics()
@@ -728,7 +745,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 	autoFarmToggle = ControlsSection:Toggle({
 		Title = "Endless Auto Farm",
-		Desc = "Mulai siklus kurir bulletproof tanpa race condition.",
+		Desc = "Mulai siklus kurir frame-accurate tanpa bug.",
 		Value = false,
 		Callback = function(active)
 			if State.AutoFarmActive == active then return end
