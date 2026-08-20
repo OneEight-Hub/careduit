@@ -87,8 +87,12 @@ end)
 local ServerModule = _G.CDID_LoadModule("server_manager.lua")
 ServerModule.Init(Window, Utils, Context)
 
--- 2. BCA Courier (Diberikan UICreate)
+-- 2. BCA Courier
 local BCAModule = _G.CDID_LoadModule("bca_courier.lua")
 BCAModule.Init(Window, Utils, Context, UICreate)
 
-print("🚀 CDID Hub Loaded Successfully!")
+-- 3. Merdeka Event Race Farm (BARU)
+local MerdekaModule = _G.CDID_LoadModule("merdeka_farm.lua")
+MerdekaModule.Init(Window, Utils, Context, UICreate)
+
+print("🚀 CDID Hub Loaded Successfully with Merdeka Event!")
