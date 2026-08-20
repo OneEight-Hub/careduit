@@ -605,10 +605,10 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		Icon = "solar:box-minimalistic-bold"
 	})
 
-	local ControlsSection = BCATab:Section({ Title = "Auto Farm Controls" })
-	local DashboardSection = BCATab:Section({ Title = "Floating Mini Dashboard" })
-	local SettingsSection = BCATab:Section({ Title = "Konfigurasi Drive Engine" })
-	local ShortcutsSection = BCATab:Section({ Title = "Pintasan Teleport" })
+	local ControlsSection = BCATab:Section({ Title = "Auto Farm Controls", Opened = true })
+	local DashboardSection = BCATab:Section({ Title = "Floating Mini Dashboard", Opened = true })
+	local SettingsSection = BCATab:Section({ Title = "Konfigurasi Drive Engine", Opened = true })
+	local ShortcutsSection = BCATab:Section({ Title = "Pintasan Teleport", Opened = true })
 
 	DashboardSection:Button({
 		Title = "Toggle Floating Dashboard (BCA Pocket)",
