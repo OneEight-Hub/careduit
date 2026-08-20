@@ -351,19 +351,25 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 			-- ======================================================================
 			-- SINKRONISASI MINIGAME LOAD KOPER (LOADROUND)
 			-- ======================================================================
+			-- ======================================================================
+			-- SINKRONISASI MINIGAME LOAD KOPER (ANTI-TOO-EARLY / 100% GREEN ZONE)
+			-- ======================================================================
 			elseif action == "LoadRound" and typeof(arg1) == "table" then
 				local greenStart = arg1.greenStart or 0.4
 				local greenSize = arg1.greenSize or 0.2
-				local period = arg1.period or 1.0
+				local period = math.max(arg1.period or 1.0, 0.1)
 
-				-- Target tepat di tengah slot hijau
-				local targetProgress = greenStart + (greenSize * 0.5)
+				-- Target di 55% lebar zona hijau (sedikit lewat tengah agar tidak kena batas awal)
+				local targetProgress = greenStart + (greenSize * 0.55)
 
-				local ping = 0
-				pcall(function() ping = (LocalPlayer:GetNetworkPing() or 0) / 2 end)
+				-- Waktu tempuh murni dari 0 ke targetProgress
+				local delayTime = targetProgress * period
 
-				-- Waktu tempuh dari 0 ke titik tengah
-				local delayTime = math.max(0.1, (targetProgress * period) - ping)
+				-- Beri safety offset minimal 0.22 detik agar server siap menerima input
+				if delayTime < 0.22 then
+					-- Jika zona hijau terlalu di depan (misal 0.1), tunggu putaran balik (2 - targetProgress)
+					delayTime = (2 - targetProgress) * period
+				end
 
 				local curSession = Context.Session
 				task.delay(delayTime, function()
