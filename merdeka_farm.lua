@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - AUTO FARM MERDEKA RACE EVENT (SAFE DRIVE MOBIL)
+-- CDID HUB - AUTO FARM MERDEKA RACE EVENT (AUTO 3X SPEED ON RETURN)
 -- ==============================================================================
 local MerdekaFarm = {}
 
@@ -13,7 +13,9 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 	-- CONFIGURABLE VALUES
 	local Config = {
 		DriveSpeed = 190,
+		ReturnSpeedMultiplier = 3, -- Pengali kecepatan 3x saat membawa bendera
 		MinTravelDuration = 8,
+		MinReturnDuration = 3,     -- Batas minimum waktu tempuh saat return
 		ActionDelay = 0.3,
 		LoopWait = 0.5,
 		RestartDelay = 3.0,
@@ -122,9 +124,9 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 	end
 
 	-- ==============================================================================
-	-- SAFE DRIVE (SMOOTHSTEP PATHING ANTI-RUBBERBAND)
+	-- SAFE DRIVE (SMOOTHSTEP PATHING ANTI-RUBBERBAND DENGAN DYNAMIC DURATION)
 	-- ==============================================================================
-	local function DriveCarNaturallyTo(targetPos, speed)
+	local function DriveCarNaturallyTo(targetPos, speed, minDuration)
 		if isDrivingActive or not targetPos then return end
 		isDrivingActive = true
 
@@ -135,6 +137,8 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 		end
 
 		speed = speed or Config.DriveSpeed
+		minDuration = minDuration or Config.MinTravelDuration
+
 		local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
 		local seat = car:FindFirstChildWhichIsA("VehicleSeat", true)
 		if not primary then
@@ -151,19 +155,21 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 		local targetCF = CFrame.new(stopPos, stopPos + flatDir)
 
 		local dist = (startCF.Position - stopPos).Magnitude
-		local duration = math.max(Config.MinTravelDuration, dist / speed)
+		local duration = math.max(minDuration, dist / speed)
 
 		primary.Anchored = false
 
-		-- Nonaktifkan tabrakan body mobil agar tidak nyangkut part tak terlihat
+		-- Nonaktifkan tabrakan body mobil agar tidak nyangkut
 		for _, p in ipairs(car:GetDescendants()) do
 			if p:IsA("BasePart") and p.Name ~= "VehicleSeat" and p ~= primary then
 				p.CanCollide = false
 			end
 		end
 
+		local statusLabel = State.IsCarryingFlag and "⚡ [Boost 3X Return Base]" or "🏎️ [Drive to Flag]"
+		print(string.format("%s (Speed: %.0f | Jarak: %.0f studs | Durasi: %.1f dtk)...", statusLabel, speed, dist, duration))
+
 		local startTime = os.clock()
-		print(string.format("🏎️ [Merdeka Drive] Meluncur ke target (Jarak: %.0f studs | Estimasi: %.1f dtk)...", dist, duration))
 
 		while State.AutoFarmActive and State.IsRacing do
 			if _G.MainCoreSession ~= Context.Session then break end
@@ -340,7 +346,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 					State.IsCarryingFlag = true
 					State.BasePos = payload.BasePos
 					State.CurrentTargetPos = payload.BasePos
-					print("📦 [MerdekaHUD] Bendera terambil! Mengantar kembali ke Base...")
+					print("📦 [MerdekaHUD] Bendera diambil! Siap Boost 3x Speed menuju Base...")
 
 				elseif action == "Planted" then
 					State.IsCarryingFlag = false
@@ -383,7 +389,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 	end
 
 	-- ==============================================================================
-	-- CORE AUTOFARM LOOP (SAFE DRIVE EXECUTION)
+	-- CORE AUTOFARM LOOP (DENGAN DYNAMIC 3X RETURN BOOST)
 	-- ==============================================================================
 	local function StartAutoFarmLoop()
 		task.spawn(function()
@@ -397,7 +403,16 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 				if State.IsRacing then
 					local car = GetPlayerCar()
 					if car and State.CurrentTargetPos and not isDrivingActive then
-						DriveCarNaturallyTo(State.CurrentTargetPos, Config.DriveSpeed)
+						-- Hitung kecepatan & durasi dinamis berdasarkan status bawa bendera
+						local targetSpeed = Config.DriveSpeed
+						local minDur = Config.MinTravelDuration
+
+						if State.IsCarryingFlag then
+							targetSpeed = Config.DriveSpeed * Config.ReturnSpeedMultiplier
+							minDur = Config.MinReturnDuration
+						end
+
+						DriveCarNaturallyTo(State.CurrentTargetPos, targetSpeed, minDur)
 					end
 					task.wait(Config.LoopWait)
 					continue
@@ -515,7 +530,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 	-- TOGGLE AUTO FARM
 	autoFarmToggle = ControlsSection:Toggle({
 		Title = "Auto Farm Merdeka Race (Safe Drive)",
-		Desc = "Lobi Otomatis -> Safe Drive Ambil Bendera -> Antar ke Base -> Endless Loop.",
+		Desc = "Auto Matchmaking -> Drive Ambil Bendera -> 3X Speed Return Base -> Loop.",
 		Value = false,
 		Callback = function(active)
 			if State.AutoFarmActive == active then return end
@@ -550,7 +565,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 			local stateText = "Idle"
 			if State.IsRacing then
 				if State.IsCarryingFlag then
-					stateText = "Mengantar Bendera ke Base 📦"
+					stateText = "⚡ Mengantar Bendera ke Base (3X Speed)"
 				else
 					stateText = "Meluncur ke Titik Bendera 🚩"
 				end
@@ -570,7 +585,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 	end)
 
 	SettingsSection:Input({
-		Title = "Kecepatan Safe Drive Mobil",
+		Title = "Kecepatan Base (Ambil Bendera)",
 		Value = tostring(Config.DriveSpeed),
 		Callback = function(val)
 			local num = tonumber(val)
@@ -579,9 +594,23 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate)
 	})
 
 	SettingsSection:Slider({
-		Title = "Durasi Minimum Perjalanan",
+		Title = "Pengali Kecepatan Return (Multiplier)",
+		Value = { Min = 1, Max = 5, Default = 3 },
+		Callback = function(val)
+			Config.ReturnSpeedMultiplier = val
+		end
+	})
+
+	SettingsSection:Slider({
+		Title = "Durasi Minimum Ambil Bendera",
 		Value = { Min = 5, Max = 30, Default = 8 },
 		Callback = function(val) Config.MinTravelDuration = val end
+	})
+
+	SettingsSection:Slider({
+		Title = "Durasi Minimum Return ke Base",
+		Value = { Min = 1, Max = 10, Default = 3 },
+		Callback = function(val) Config.MinReturnDuration = val end
 	})
 end
 
