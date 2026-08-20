@@ -95,9 +95,16 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 			local ok, Net = pcall(require, netModule)
 			if not ok or not Net then return end
 
-			local data = Net:InvokeServer("MerdekaShopData")
-			if type(data) == "table" and data.Points then
-				State.MerdekaPoints = data.Points
+			local data = nil
+			pcall(function()
+				data = Net:InvokeServer("MerdekaShopData")
+			end)
+
+			if type(data) == "table" then
+				-- CDID Server mengembalikan field 'Points' atau 'Point'
+				local pts = data.Points or data.Point or 0
+				State.MerdekaPoints = tonumber(pts) or 0
+
 				if FloatingDash then
 					FloatingDash.UpdateSaldo(string.format("%s Pts", FormatNumber(State.MerdekaPoints)))
 				end
@@ -106,6 +113,7 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 	end
 
 	FetchOwnedCars()
+	FetchMerdekaShopData()
 
 	-- ==============================================================================
 	-- REMOTES & NETWORK HOOKS
@@ -223,7 +231,10 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 						if resFrame then resFrame.Visible = false end
 					end
 
-					FetchMerdekaShopData()
+					-- Tunggu 1 detik agar server selesai mencatat reward baru sebelum fetch saldo
+					task.delay(1.0, function()
+						FetchMerdekaShopData()
+					end)
 
 				elseif action == "Left" or action == "Reset" then
 					State.IsRacing = false
@@ -412,26 +423,37 @@ function MerdekaFarm.Init(Window, Utils, Context, UICreate, DriveEngine)
 		Image = "flag"
 	})
 
+	-- Live status updater & periodic points poller
 	task.spawn(function()
-		while task.wait(0.4) do
+		local pollCounter = 0
+		while task.wait(0.5) do
 			if _G.MainCoreSession ~= Context.Session then break end
+
+			-- Polling poin ke server tiap 10 detik (20 ticks x 0.5s)
+			pollCounter = pollCounter + 1
+			if pollCounter >= 20 then
+				FetchMerdekaShopData()
+				pollCounter = 0
+			end
+
 			local stateText = "Idle"
 			if State.IsRacing then
 				if State.IsCarryingFlag then
-					stateText = "⚡ Mengantar Bendera ke Base (3X Speed)"
+					stateText = "⚡ Mengantar Bendera (3X Speed)"
 				else
-					stateText = "Meluncur ke Titik Bendera 🚩"
+					stateText = "Meluncur ke Bendera 🚩"
 				end
 			elseif State.InLobby then
-				stateText = "Di Lobi (Menunggu Ready/Start) ⏳"
+				stateText = "Di Lobi (Menunggu Start) ⏳"
 			end
 
-			local fullDesc = string.format("Status: %s | Bendera: %d/%d | Selesai: %d", stateText, State.PlantedCount, State.TotalFlags, State.RacesCompleted)
+			local fullDesc = string.format("Status: %s | Bendera: %d/%d | Selesai: %d | PTS: %s", stateText, State.PlantedCount, State.TotalFlags, State.RacesCompleted, FormatNumber(State.MerdekaPoints))
 			pcall(function()
 				if statusParagraph then statusParagraph:SetDesc(fullDesc) end
 				if FloatingDash then
 					FloatingDash.UpdateStatus(stateText)
 					FloatingDash.UpdateTrips(State.RacesCompleted)
+					FloatingDash.UpdateSaldo(string.format("%s Pts", FormatNumber(State.MerdekaPoints)))
 				end
 			end)
 		end
