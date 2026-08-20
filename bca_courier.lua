@@ -1,22 +1,22 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (FULL STABLE, ANTI-RUBBERBAND & FINANCIAL ANALYTICS)
+-- CDID HUB - BCA COURIER (POWERED BY DRIVE ENGINE & FINANCIAL ANALYTICS)
 -- ==============================================================================
 local BCA = {}
 
-function BCA.Init(Window, Utils, Context, UICreate)
+function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 	local Players = game:GetService("Players")
 	local ReplicatedStorage = game:GetService("ReplicatedStorage")
 	local Workspace = game:GetService("Workspace")
-	local RunService = game:GetService("RunService")
 	local LocalPlayer = Players.LocalPlayer
 
 	-- CONFIGURABLE VALUES
 	local Config = {
-		TweenSpeed = 180,
+		DriveSpeed = 180,
 		MinTravelDuration = 20,
 		ActionDelay = 0.3,
 		LoopWait = 0.4,
-		RestartDelay = 2.0
+		RestartDelay = 2.0,
+		FreezeCamera = true
 	}
 
 	-- STATE & FINANCIAL STATS
@@ -48,7 +48,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		EarnedText = "+Rp 0"
 	}
 
-	local isDrivingActive = false
 	local autoFarmToggle
 	local statusParagraph
 	local Network = nil
@@ -86,6 +85,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	end
 
 	local function ResetPlayerCamera()
+		if DriveEngine and DriveEngine.FreezeCamera then
+			DriveEngine.FreezeCamera(false)
+		end
 		local hum = GetValidHumanoid()
 		local camera = Workspace.CurrentCamera
 		if camera and hum then
@@ -96,6 +98,9 @@ function BCA.Init(Window, Utils, Context, UICreate)
 	end
 
 	local function GetPlayerCar()
+		if DriveEngine and DriveEngine.GetPlayerCar then
+			return DriveEngine.GetPlayerCar()
+		end
 		local vehicles = Workspace:FindFirstChild("Vehicles")
 		if not vehicles then return nil end
 		for _, v in ipairs(vehicles:GetChildren()) do
@@ -124,136 +129,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 			if p:IsA("ProximityPrompt") and p.Name ~= "MuatPrompt" then return p end
 		end
 		return nil
-	end
-
-	local function EnterDriverSeat(car)
-		local hum, hrp = GetValidHumanoid()
-		if not hum or not hrp then return false end
-
-		local seat = car:FindFirstChildWhichIsA("VehicleSeat", true) 
-			or car:FindFirstChild("DriveSeat", true) 
-			or car:FindFirstChild("DriverSeat", true)
-
-		if not seat then return false end
-
-		local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
-		if primary then primary.Anchored = false end
-		if hum.SeatPart == seat or hum.Sit then return true end
-
-		hrp.CFrame = seat.CFrame * CFrame.new(0, 1.2, 1.2)
-		task.wait(Config.ActionDelay)
-
-		local drivePrompt = seat:FindFirstChild("PromptDriveSeat", true)
-			or seat:FindFirstChildWhichIsA("ProximityPrompt", true)
-			or car:FindFirstChild("PromptDriveSeat", true)
-			or car:FindFirstChild("ProximityPrompt", true)
-
-		if drivePrompt and drivePrompt.Enabled then
-			drivePrompt.RequiresLineOfSight = false
-			drivePrompt.MaxActivationDistance = 25
-			if fireproximityprompt then 
-				fireproximityprompt(drivePrompt) 
-			else
-				pcall(function() seat:Sit(hum) end)
-			end
-			drivePrompt:InputHoldBegin()
-			task.wait(drivePrompt.HoldDuration + 0.1)
-			drivePrompt:InputHoldEnd()
-		else
-			pcall(function() seat:Sit(hum) end)
-		end
-
-		local timeout = os.clock()
-		while not hum.Sit and (os.clock() - timeout < 2.5) do task.wait(0.1) end
-		return hum.Sit
-	end
-
-	local function ExitDriverSeat(car)
-		local hum = GetValidHumanoid()
-		if hum and hum.Sit then
-			hum.Sit = false
-			task.wait(Config.ActionDelay)
-		end
-		if car and car.PrimaryPart then
-			car.PrimaryPart.Anchored = true
-		end
-	end
-
-	-- ==============================================================================
-	-- SMOOTH VEHICLE INTERPOLATION (ANTI-RUBBERBANDING & ANTI-PULLBACK)
-	-- ==============================================================================
-	local function DriveCarNaturallyTo(car, targetPos, speed)
-		if isDrivingActive then return end
-		isDrivingActive = true
-
-		speed = speed or Config.TweenSpeed
-		local primary = car.PrimaryPart or car:FindFirstChildWhichIsA("BasePart")
-		local seat = car:FindFirstChildWhichIsA("VehicleSeat", true)
-		if not primary then 
-			isDrivingActive = false 
-			return 
-		end
-
-		local hum = GetValidHumanoid()
-		local startCF = car:GetPivot()
-
-		local dirToAtm = (targetPos - startCF.Position).Unit
-		local flatDir = Vector3.new(dirToAtm.X, 0, dirToAtm.Z).Unit
-		local parkPos = targetPos - (flatDir * 14) + Vector3.new(0, 1.2, 0)
-		local targetCF = CFrame.new(parkPos, parkPos + flatDir)
-
-		local dist = (startCF.Position - parkPos).Magnitude
-		local duration = math.max(Config.MinTravelDuration, dist / speed)
-
-		primary.Anchored = false
-
-		-- Nonaktifkan tabrakan body mobil agar tidak nyangkut saat melaju
-		for _, p in ipairs(car:GetDescendants()) do
-			if p:IsA("BasePart") and p.Name ~= "VehicleSeat" and p ~= primary then
-				p.CanCollide = false
-			end
-		end
-
-		local startTime = os.clock()
-		print(string.format("🚗 [Safe Drive] Meluncur ke target (Jarak: %.0f studs | Estimasi: %.1f dtk)...", dist, duration))
-
-		while State.AutoDelivering do
-			if _G.MainCoreSession ~= Context.Session then break end
-
-			local elapsed = os.clock() - startTime
-			local alpha = math.clamp(elapsed / duration, 0, 1)
-
-			-- Smoothstep interpolation (Halus dan natural)
-			local smoothAlpha = alpha * alpha * (3 - 2 * alpha)
-			local currentCF = startCF:Lerp(targetCF, smoothAlpha)
-
-			if hum and not hum.Sit and seat then
-				pcall(function() seat:Sit(hum) end)
-			end
-
-			-- Update CFrame dan matikan bentrokan fisika velocity
-			car:PivotTo(currentCF)
-			primary.AssemblyLinearVelocity = Vector3.zero
-			primary.AssemblyAngularVelocity = Vector3.zero
-
-			if alpha >= 1 then break end
-			RunService.Heartbeat:Wait()
-		end
-
-		-- Stabilkan posisi saat tiba di tujuan
-		car:PivotTo(targetCF)
-		for _, p in ipairs(car:GetDescendants()) do
-			if p:IsA("BasePart") then
-				p.AssemblyLinearVelocity = Vector3.zero
-				p.AssemblyAngularVelocity = Vector3.zero
-			end
-		end
-
-		task.wait(0.2)
-		primary.Anchored = true
-		task.wait(Config.ActionDelay)
-
-		isDrivingActive = false
 	end
 
 	-- ==============================================================================
@@ -558,31 +433,39 @@ function BCA.Init(Window, Utils, Context, UICreate)
 				local bagasiPoint = car and car:FindFirstChild("BagasiPoint", true)
 				local ambilPrompt = GetAmbilPrompt(bagasiPoint)
 
-				if car and not State.IsBusy and not isDrivingActive then
+				if car and not State.IsBusy then
 					local hum, hrp = GetValidHumanoid()
 					local distToAtm = (hrp and State.TargetPos) and (hrp.Position - State.TargetPos).Magnitude or 999
 
-					-- 1. FASE MENYETIR KE ATM
-					if not State.Carrying and State.TargetPos and distToAtm > 25 then
+					-- 1. FASE MENYETIR KE ATM MENGGUNAKAN DRIVE ENGINE
+					if not State.Carrying and State.TargetPos and distToAtm > 35 then
 						State.IsBusy = true
-						EnterDriverSeat(car)
-						task.wait(Config.ActionDelay)
 
-						if not State.AutoDelivering then 
-							State.IsBusy = false 
-							break 
+						if DriveEngine and not DriveEngine.IsDriving() then
+							DriveEngine.DriveTo(State.TargetPos, {
+								Speed = Config.DriveSpeed,
+								MinDuration = Config.MinTravelDuration,
+								FreezeCam = Config.FreezeCamera,
+								StopCondition = function()
+									return not State.AutoDelivering or not State.AutoFarmActive or (_G.MainCoreSession ~= Context.Session)
+								end
+							})
 						end
 
-						DriveCarNaturallyTo(car, State.TargetPos, Config.TweenSpeed)
-						ExitDriverSeat(car)
-						task.wait(0.4)
+						-- Turun dari kursi saat tiba
+						local curHum = GetValidHumanoid()
+						if curHum and curHum.Sit then
+							curHum.Sit = false
+							task.wait(Config.ActionDelay)
+						end
+
 						State.IsBusy = false
 					end
 
 					if not State.AutoDelivering then break end
 
 					-- 2. FASE AMBIL KOPER DARI BAGASI
-					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 45 then
+					if not State.Carrying and bagasiPoint and ambilPrompt and distToAtm <= 55 then
 						State.IsBusy = true
 						Utils.SafeTeleportChar(bagasiPoint.CFrame * CFrame.new(0, 0, 1.8), Config.ActionDelay)
 						task.wait(0.2)
@@ -632,7 +515,6 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		State.LoadingActive = false
 		State.DeliveryActive = false
 		State.IsBusy = false
-		isDrivingActive = false
 		State.Phase = "Unemployee"
 		State.Loaded = 0
 		State.Total = 0
@@ -660,7 +542,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 	local ControlsSection = BCATab:Section({ Title = "Auto Farm Controls" })
 	local DashboardSection = BCATab:Section({ Title = "Floating Mini Dashboard" })
-	local SettingsSection = BCATab:Section({ Title = "Konfigurasi Kecepatan & Anti-Nerf" })
+	local SettingsSection = BCATab:Section({ Title = "Konfigurasi Drive Engine" })
 	local ShortcutsSection = BCATab:Section({ Title = "Pintasan Teleport" })
 
 	DashboardSection:Button({
@@ -714,7 +596,7 @@ function BCA.Init(Window, Utils, Context, UICreate)
 
 	autoFarmToggle = ControlsSection:Toggle({
 		Title = "Endless Auto Farm",
-		Desc = "Mulai/Hentikan siklus kurir dengan simulasi perjalanan natural.",
+		Desc = "Mulai/Hentikan siklus kurir otomatis.",
 		Value = false,
 		Callback = function(active)
 			if State.AutoFarmActive == active then return end
@@ -780,21 +662,24 @@ function BCA.Init(Window, Utils, Context, UICreate)
 						end
 						if not State.AutoFarmActive then break end
 
+						-- Return car kembali ke spawner
 						local returnCar = GetPlayerCar()
-						if returnCar then
-							EnterDriverSeat(returnCar)
-							task.wait(Config.ActionDelay)
-							if not State.AutoFarmActive then break end
-							local Mf = GetBcaFolder()
-							local CarSpawner = Mf and Mf:FindFirstChild("CAR_SPAWNER_NPC")
-							if CarSpawner then
-								DriveCarNaturallyTo(returnCar, CarSpawner:GetPivot().Position, Config.TweenSpeed)
-							end
-							ExitDriverSeat(returnCar)
+						local Mf = GetBcaFolder()
+						local CarSpawner = Mf and Mf:FindFirstChild("CAR_SPAWNER_NPC")
+						if returnCar and CarSpawner and DriveEngine then
+							DriveEngine.DriveTo(CarSpawner:GetPivot().Position, {
+								Speed = Config.DriveSpeed,
+								MinDuration = 10,
+								FreezeCam = Config.FreezeCamera,
+								StopCondition = function()
+									return not State.AutoFarmActive or (_G.MainCoreSession ~= Context.Session)
+								end
+							})
+							local curHum = GetValidHumanoid()
+							if curHum and curHum.Sit then curHum.Sit = false end
 						end
 						if not State.AutoFarmActive then break end
 
-						local Mf = GetBcaFolder()
 						local StartNpc = Mf and Mf:FindFirstChild("NPC_START_JOB")
 						if StartNpc then
 							Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
@@ -844,12 +729,21 @@ function BCA.Init(Window, Utils, Context, UICreate)
 		end
 	end)
 
+	SettingsSection:Toggle({
+		Title = "Freeze Camera Saat Melaju (FPS Boost)",
+		Desc = "Mengunci kamera saat mobil bergerak untuk menurunkan beban render GPU.",
+		Value = Config.FreezeCamera,
+		Callback = function(val)
+			Config.FreezeCamera = val
+		end
+	})
+
 	SettingsSection:Input({
 		Title = "Kecepatan Mengemudi (Speed)",
-		Value = tostring(Config.TweenSpeed),
+		Value = tostring(Config.DriveSpeed),
 		Callback = function(val)
 			local num = tonumber(val)
-			if num then Config.TweenSpeed = num end
+			if num then Config.DriveSpeed = num end
 		end
 	})
 
