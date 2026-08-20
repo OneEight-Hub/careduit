@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - DYNAMIC SERVER & PRIVATE SERVER MANAGER (AUTO-SYNC GAME CODE)
+-- CDID HUB - DYNAMIC SERVER & PRIVATE SERVER MANAGER (EXACT COMPONENT MATCH)
 -- ==============================================================================
 local ServerManager = {}
 
@@ -10,9 +10,10 @@ function ServerManager.Init(Window, Utils, Context)
 	local Players = game:GetService("Players")
 	local LocalPlayer = Players.LocalPlayer
 
-	-- 1. LOAD MODUL TELEPORT & NETWORK CDID
+	-- 1. LOAD MODUL CDID
 	local CDID_TeleportModule = nil
 	local CDID_Network = nil
+	local CDID_UIAnimation = nil
 
 	local SharedFolder = ReplicatedStorage:WaitForChild("Shared", 5)
 	if SharedFolder then
@@ -29,9 +30,18 @@ function ServerManager.Init(Window, Utils, Context)
 		end
 	end
 
-	-- 2. PARSE LIST MAP SECARA DINAMIS
-	local MapDictionary = {}   -- { ["JAKARTA"] = { PlaceId = ..., Key = "Jakarta" } }
-	local MapNamesDisplay = {} -- { "BALI", "BANDUNG", "JAKARTA", ... }
+	local ControllerFolder = ReplicatedStorage:WaitForChild("Controller", 5)
+	if ControllerFolder then
+		local uiAnimScript = ControllerFolder:WaitForChild("UIAnimation", 5)
+		if uiAnimScript then
+			local ok, uiMod = pcall(require, uiAnimScript)
+			if ok and uiMod then CDID_UIAnimation = uiMod end
+		end
+	end
+
+	-- 2. MAP DICTIONARY
+	local MapDictionary = {}
+	local MapNamesDisplay = {}
 	local defaultSelected = "JAKARTA"
 
 	local function RefreshMapData()
@@ -40,9 +50,7 @@ function ServerManager.Init(Window, Utils, Context)
 
 		local rawList = nil
 		if CDID_TeleportModule and CDID_TeleportModule.GetMapList then
-			pcall(function()
-				rawList = CDID_TeleportModule.GetMapList()
-			end)
+			pcall(function() rawList = CDID_TeleportModule.GetMapList() end)
 		end
 
 		if rawList and type(rawList) == "table" then
@@ -56,7 +64,6 @@ function ServerManager.Init(Window, Utils, Context)
 				table.insert(MapNamesDisplay, displayName)
 			end
 		else
-			-- Fallback data
 			local fallbackMaps = {
 				["JAKARTA"]     = { Key = "Jakarta", PlaceId = 14005966837 },
 				["BANDUNG"]     = { Key = "Bandung", PlaceId = 79488788685813 },
@@ -81,22 +88,23 @@ function ServerManager.Init(Window, Utils, Context)
 	local currentSelectedName = defaultSelected
 	local activeServerCode = ""
 
-	-- UI Elements Referensi
 	local codeInputControl = nil
 	local serverCodeParagraph = nil
 
 	-- ==============================================================================
-	-- 3. FUNGSI AUTO-DETECT KODE DARI GAME (TANPA SIMPAN FILE)
+	-- 3. DETEKSI KODE LANGSUNG DARI KOMPONEN PRIVATE SERVER
 	-- ==============================================================================
 	local function ApplyServerCode(code)
-		if not code or code == "" or code == "ServerLabel" or code == "nil" then return end
-		activeServerCode = tostring(code):gsub("%s+", "")
+		if not code or type(code) ~= "string" then return end
+		local clean = code:gsub("%s+", "")
+		if clean == "" or clean == "ServerLabel" or clean:find("ms") or clean:find(",") then return end
 
-		print("🔑 [Private Server] Kode aktif akun terdeteksi dari game:", activeServerCode)
+		activeServerCode = clean
+		print("🔑 [Private Server] Kode aktif terdeteksi:", activeServerCode)
 
 		if serverCodeParagraph then
 			pcall(function()
-				serverCodeParagraph:SetDesc("Kode Aktif Akun: " .. activeServerCode)
+				serverCodeParagraph:SetDesc("Kode Server Akun: " .. activeServerCode)
 			end)
 		end
 
@@ -107,26 +115,38 @@ function ServerManager.Init(Window, Utils, Context)
 		end
 	end
 
-	local function ScanExistingGameCode()
-		local pGui = LocalPlayer:FindFirstChild("PlayerGui")
-		if not pGui then return false end
-
-		-- Scan ServerLabel di PlayerGui
-		for _, desc in ipairs(pGui:GetDescendants()) do
-			if desc.Name == "ServerLabel" and desc:IsA("TextLabel") and desc.Text ~= "" and desc.Text ~= "ServerLabel" then
-				ApplyServerCode(desc.Text)
+	local function ScanExactPrivateServerFrame()
+		-- 1. Cek dari WindowModule UIAnimation game jika ada
+		if CDID_UIAnimation and CDID_UIAnimation.WindowModule and CDID_UIAnimation.WindowModule.PrivateServer then
+			local psComp = CDID_UIAnimation.WindowModule.PrivateServer
+			if psComp.ServerLabel and psComp.ServerLabel.Text ~= "" and psComp.ServerLabel.Text ~= "ServerLabel" then
+				ApplyServerCode(psComp.ServerLabel.Text)
 				return true
+			end
+		end
+
+		-- 2. Cek dari Hierarki PlayerGui yang memiliki InsertCode & GenerateButton
+		local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+		if pGui then
+			for _, inst in ipairs(pGui:GetDescendants()) do
+				if inst:FindFirstChild("InsertCode") and inst:FindFirstChild("GenerateButton") then
+					local sLabel = inst:FindFirstChild("ServerLabel")
+					if sLabel and sLabel:IsA("TextLabel") and sLabel.Text ~= "" and sLabel.Text ~= "ServerLabel" then
+						ApplyServerCode(sLabel.Text)
+						return true
+					end
+				end
 			end
 		end
 		return false
 	end
 
-	-- Hook Client Event dari Network CDID untuk menerima update kode realtime
+	-- Hook Network Remote PrivateServer
 	if CDID_Network and CDID_Network.OnClientEvent then
 		local psHook = CDID_Network.OnClientEvent("PrivateServer", function(action, arg1)
 			if typeof(arg1) == "string" and arg1 ~= "" then
 				ApplyServerCode(arg1)
-			elseif typeof(action) == "string" and action:len() > 3 and not action:find("Join") then
+			elseif typeof(action) == "string" and not action:find("Join") and not action:find("Create") then
 				ApplyServerCode(action)
 			end
 		end)
@@ -134,23 +154,21 @@ function ServerManager.Init(Window, Utils, Context)
 	end
 
 	-- ==============================================================================
-	-- UI WINDUI TAB SETUP
+	-- UI WINDUI SETUP
 	-- ==============================================================================
 	local ServerTab = Window:Tab({
 		Title = "Server Manager",
 		Icon = "solar:server-square-bold"
 	})
 
-	local PublicMapSection = ServerTab:Section({ Title = "Public Map Selector (Dynamic)" })
+	local PublicMapSection = ServerTab:Section({ Title = "Public Map Selector" })
 	local PrivateServerSection = ServerTab:Section({ Title = "Private Server System" })
 	local ServerControlSection = ServerTab:Section({ Title = "Kontrol Server Umum" })
 
-	-- ==========================================
-	-- A. PUBLIC MAP SELECTOR
-	-- ==========================================
+	-- A. PUBLIC MAP
 	local mapDropdown = PublicMapSection:Dropdown({
 		Title = "Pilih Map Tujuan",
-		Desc = "Daftar map tersinkronisasi langsung dari modul game.",
+		Desc = "Map tujuan untuk Public / Private Server.",
 		Values = MapNamesDisplay,
 		Value = currentSelectedName,
 		Callback = function(chosen)
@@ -160,12 +178,10 @@ function ServerManager.Init(Window, Utils, Context)
 
 	PublicMapSection:Button({
 		Title = "Pindah ke Public Map Terpilih",
-		Desc = "Teleport ke server publik map tersebut dengan loading screen resmi.",
 		Callback = function()
 			local targetInfo = MapDictionary[currentSelectedName]
 			if not targetInfo then return end
 
-			print("🚀 [Map Manager] Teleporting ke Public Map:", currentSelectedName)
 			if CDID_TeleportModule and CDID_TeleportModule.TeleporToPublicServer then
 				local pGui = LocalPlayer:FindFirstChild("PlayerGui")
 				local ok = pcall(function()
@@ -180,30 +196,16 @@ function ServerManager.Init(Window, Utils, Context)
 		end
 	})
 
-	PublicMapSection:Button({
-		Title = "Refresh Daftar Map",
-		Desc = "Muat ulang daftar map dari game.",
-		Callback = function()
-			RefreshMapData()
-			if mapDropdown and mapDropdown.SetValues then
-				mapDropdown:SetValues(MapNamesDisplay)
-			end
-			print("🔄 [Map Manager] Daftar map berhasil diperbarui.")
-		end
-	})
-
-	-- ==========================================
-	-- B. PRIVATE SERVER SYSTEM
-	-- ==========================================
+	-- B. PRIVATE SERVER
 	serverCodeParagraph = PrivateServerSection:Paragraph({
 		Title = "Status Private Server",
-		Desc = "Kode Aktif Akun: Memeriksa dari game...",
+		Desc = "Kode Server Akun: Belum dibuat / Belum terdeteksi",
 		Image = "key"
 	})
 
 	codeInputControl = PrivateServerSection:Input({
 		Title = "Kode Private Server",
-		Placeholder = "Masukkan / tunggu kode otomatis...",
+		Placeholder = "Masukkan / tunggu kode terdeteksi...",
 		Value = activeServerCode,
 		Callback = function(val)
 			activeServerCode = tostring(val or ""):gsub("%s+", "")
@@ -212,10 +214,10 @@ function ServerManager.Init(Window, Utils, Context)
 
 	PrivateServerSection:Button({
 		Title = "Join Private Server",
-		Desc = "Masuk ke private server menggunakan kode di atas & map terpilih.",
+		Desc = "Join menggunakan kode di atas dan map terpilih.",
 		Callback = function()
 			if activeServerCode == "" then
-				warn("⚠️ [Private Server] Kode server belum ada! Silakan ambil atau buat terlebih dahulu.")
+				warn("⚠️ [Private Server] Kode server belum terisi!")
 				return
 			end
 
@@ -226,44 +228,33 @@ function ServerManager.Init(Window, Utils, Context)
 
 			if CDID_Network then
 				CDID_Network:FireServer("PrivateServer", "Join", tostring(activeServerCode), mapKey)
-			else
-				warn("⚠️ [Private Server] Module Network tidak ditemukan!")
 			end
 		end
 	})
 
 	PrivateServerSection:Button({
-		Title = "Ambil / Buat Kode Server Milik Sendiri",
-		Desc = "Minta kode server akunmu dari game (otomatis buat baru jika belum pernah).",
+		Title = "Ambil / Generate Kode Server",
+		Desc = "Meminta kode server aktif milik akunmu dari game.",
 		Callback = function()
-			print("🔄 [Private Server] Mengambil/Generate kode private server dari server CDID...")
 			if CDID_Network then
 				CDID_Network:FireServer("PrivateServer", "Create")
-			else
-				warn("⚠️ [Private Server] Module Network tidak ditemukan!")
 			end
 		end
 	})
 
 	PrivateServerSection:Button({
 		Title = "Salin Kode ke Clipboard",
-		Desc = "Copy kode private server yang sedang aktif.",
 		Callback = function()
 			if activeServerCode ~= "" and setclipboard then
 				setclipboard(activeServerCode)
-				print("📋 [Clipboard] Kode server berhasil disalin:", activeServerCode)
-			else
-				warn("⚠️ [Clipboard] Belum ada kode server untuk disalin!")
+				print("📋 [Clipboard] Disalin:", activeServerCode)
 			end
 		end
 	})
 
-	-- ==========================================
-	-- C. KONTROL SERVER UMUM
-	-- ==========================================
+	-- C. KONTROL UMUM
 	ServerControlSection:Button({
 		Title = "Rejoin Server Ini",
-		Desc = "Masuk kembali ke server saat ini.",
 		Callback = function()
 			pcall(function()
 				TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
@@ -273,41 +264,32 @@ function ServerManager.Init(Window, Utils, Context)
 
 	ServerControlSection:Button({
 		Title = "Server Hop (Cari Server Lain)",
-		Desc = "Mencari server publik lain yang masih memiliki slot kosong.",
 		Callback = function()
 			task.spawn(function()
-				print("🔍 [Server Manager] Mencari server alternatif...")
 				local placeId = game.PlaceId
 				local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", placeId)
-				local success, result = pcall(function()
-					return game:HttpGet(url)
-				end)
+				local success, result = pcall(function() return game:HttpGet(url) end)
 
 				if success and result then
 					local data = HttpService:JSONDecode(result)
 					if data and data.data then
 						for _, s in ipairs(data.data) do
 							if s.playing < s.maxPlayers and s.id ~= game.JobId then
-								print("🚀 [Server Manager] Menghubungkan ke Server ID:", s.id)
 								TeleportService:TeleportToPlaceInstance(placeId, s.id, LocalPlayer)
 								return
 							end
 						end
 					end
 				end
-				warn("⚠️ [Server Manager] Gagal mencari server via API, melakukan teleport reguler...")
 				TeleportService:Teleport(placeId, LocalPlayer)
 			end)
 		end
 	})
 
-	-- Jalankan pemindaian kode game di background saat tab diinisialisasi
+	-- Auto Scan saat modul dibuka
 	task.spawn(function()
-		task.wait(1.0)
-		local found = ScanExistingGameCode()
-		if not found and serverCodeParagraph then
-			serverCodeParagraph:SetDesc("Kode Aktif Akun: Belum dibuat / Belum terdeteksi")
-		end
+		task.wait(1.5)
+		ScanExactPrivateServerFrame()
 	end)
 end
 
