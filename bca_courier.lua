@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CDID HUB - BCA COURIER (POWERED BY DRIVE ENGINE & TRIP STOPWATCH)
+-- CDID HUB - BCA COURIER (ANTI-COLLISION ATM & NO-CLIP FIX)
 -- ==============================================================================
 local BCA = {}
 
@@ -96,6 +96,22 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 			return hum, char:FindFirstChild("HumanoidRootPart")
 		end
 		return nil, nil
+	end
+
+	-- NONAKTIFKAN COLLISION PADA SEMUA MODEL ATM & PROPS TERKAIT
+	local function DisableATMCollisions()
+		local Mf = GetBcaFolder()
+		if not Mf then return end
+
+		for _, obj in ipairs(Mf:GetDescendants()) do
+			if obj:IsA("BasePart") then
+				local lowerName = obj.Name:lower()
+				local parentName = (obj.Parent and obj.Parent.Name:lower()) or ""
+				if lowerName:find("atm") or parentName:find("atm") or lowerName:find("mesin") or lowerName:find("koper") then
+					obj.CanCollide = false
+				end
+			end
+		end
 	end
 
 	local function ResetPlayerCamera()
@@ -238,6 +254,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		end
 
 		FetchPocketSaldo()
+		DisableATMCollisions()
 
 		local modules = ReplicatedStorage:WaitForChild("Modules", 15)
 		local netModule = modules and modules:WaitForChild("Network", 15)
@@ -266,7 +283,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 			if action == "SetJob" then
 				if arg1 == "BankCourier" then
 					State.Phase = "Loading"
-					-- Mulai Stopwatch jika belum berjalan
 					if not State.TripStartTime then
 						State.TripStartTime = os.clock()
 					end
@@ -284,6 +300,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				State.Total = (typeof(arg1) == "table" and arg1.totalKoper) or 0
 				State.Phase = "Loading"
 				State.TripStartTime = os.clock()
+				DisableATMCollisions()
 
 			elseif action == "Phase" then
 				State.Phase = arg1
@@ -342,7 +359,6 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				State.Total = 0
 				State.TotalTrips = State.TotalTrips + 1
 
-				-- Catat durasi akhir trip
 				if State.TripStartTime then
 					State.LastTripDuration = os.clock() - State.TripStartTime
 					State.LastTripText = FormatTime(State.LastTripDuration)
@@ -367,7 +383,7 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		if not StartNpc or State.Phase == "Loading" or State.Phase == "Delivering" then return end
 
 		print("📍 [Step 1] Teleport ke NPC Start Job...")
-		State.TripStartTime = os.clock() -- Mulai stopwatch trip
+		State.TripStartTime = os.clock()
 		Utils.SafeTeleportChar(StartNpc:GetPivot(), Config.ActionDelay)
 		task.wait(0.5)
 		local prompt = StartNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -508,23 +524,40 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 
 					if not State.AutoDelivering then break end
 
-					-- 3. FASE ISI KOPER KE ATM
+					-- 3. FASE ISI KOPER KE ATM (DENGAN ANTI-COLLISION & HITBOX POSITIONING)
 					if State.Carrying and State.TargetPos then
 						State.IsBusy = true
-						Utils.SafeTeleportChar(CFrame.new(State.TargetPos + Vector3.new(0, 0, 1.5)), Config.ActionDelay)
-						task.wait(Config.ActionDelay)
+						DisableATMCollisions()
 
 						local curHum, curHrp = GetValidHumanoid()
-						if curHrp then curHrp.Anchored = true end
+						
+						-- Teleportasi tepat di depan ATM tanpa melayang (ketinggian tanah sejajar)
+						if curHrp then
+							curHrp.AssemblyLinearVelocity = Vector3.zero
+							curHrp.AssemblyAngularVelocity = Vector3.zero
+							curHrp.CFrame = CFrame.new(State.TargetPos.X, State.TargetPos.Y, State.TargetPos.Z)
+						end
+						
+						task.wait(Config.ActionDelay)
+
+						-- Matikan bentrokan karakter sementara waktu
+						for _, p in ipairs(LocalPlayer.Character:GetDescendants()) do
+							if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+								p.CanCollide = false
+							end
+						end
 
 						if Network then Network:FireServer("BankCourier", "FillStart") end
 
 						local waitFill = os.clock()
 						while State.Carrying and State.AutoDelivering and (os.clock() - waitFill < Config.ActionDelay * 25) do 
+							if curHrp then
+								curHrp.AssemblyLinearVelocity = Vector3.zero
+								curHrp.AssemblyAngularVelocity = Vector3.zero
+							end
 							task.wait(Config.LoopWait / 2) 
 						end
 
-						if curHrp then curHrp.Anchored = false end
 						State.IsBusy = false
 						task.wait(Config.ActionDelay)
 					end
@@ -555,7 +588,10 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 		pcall(function()
 			local hum, hrp = GetValidHumanoid()
 			if hum and hum.Sit then hum.Sit = false end
-			if hrp then hrp.Anchored = false end
+			if hrp then 
+				hrp.Anchored = false 
+				hrp.AssemblyLinearVelocity = Vector3.zero
+			end
 			local car = GetPlayerCar()
 			if car and car.PrimaryPart then car.PrimaryPart.Anchored = false end
 		end)
@@ -648,6 +684,8 @@ function BCA.Init(Window, Utils, Context, UICreate, DriveEngine)
 				elseif Utils.StartGiantPlatform then
 					Utils.StartGiantPlatform()
 				end
+
+				DisableATMCollisions()
 
 				task.spawn(function()
 					print("▶️ [AutoFarm] Siklus Loop BCA Courier Dimulai...")
